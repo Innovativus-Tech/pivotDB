@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 95%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 95%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 95%;
+    --primary: 142 71% 45%;
+    --primary-foreground: 222 47% 8%;
+    --secondary: 222 47% 16%;
+    --secondary-foreground: 210 40% 95%;
+    --muted: 222 47% 16%;
+    --muted-foreground: 215 20% 55%;
+    --accent: 222 47% 16%;
+    --accent-foreground: 210 40% 95%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 95%;
+    --border: 222 47% 20%;
+    --input: 222 47% 16%;
+    --ring: 142 71% 45%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* React Flow dark theme override */
+.react-flow__background { background: hsl(var(--background)); }
+.react-flow__node { background: hsl(var(--card)); border-color: hsl(var(--border)); }
+
+/* Monaco editor dark override */
+.monaco-editor { background: hsl(var(--card)) !important; }
