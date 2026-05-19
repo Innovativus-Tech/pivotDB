@@ -7,6 +7,7 @@ import { MonitorPage } from './pages/Monitor'
 import { MovePage } from './pages/Move'
 import { ProtectPage } from './pages/Protect'
 import { SettingsPage } from './pages/Settings'
+import { MigratePage } from './pages/Migrate'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token')
@@ -30,6 +31,7 @@ export default function App() {
                 <Route path="/move" element={<MovePage />} />
                 <Route path="/protect" element={<ProtectPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/migrate" element={<MigratePage />} />
               </Routes>
             </Layout>
           </RequireAuth>

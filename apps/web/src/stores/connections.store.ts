@@ -18,8 +18,8 @@ export const useConnectionsStore = create<ConnectionsStore>()(
 
 interface AuthStore {
   token: string | null
-  user: { email: string; role: string } | null
-  setAuth: (token: string, user: { email: string; role: string }) => void
+  user: { id: string; email: string; role: string; profileId: string | null } | null
+  setAuth: (token: string, user: { id: string; email: string; role: string; profileId: string | null }) => void
   clearAuth: () => void
 }
 

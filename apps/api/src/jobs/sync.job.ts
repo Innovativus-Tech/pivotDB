@@ -16,10 +16,14 @@ export function startSyncWorker() {
   return new Worker('sync', async (job: Job) => {
     const { jobId, dryRun = false } = job.data as { jobId: string; dryRun?: boolean };
 
-    const syncJob = await prisma.syncJob.findUniqueOrThrow({
+    const syncJob = await prisma.syncJob.findUnique({
       where: { id: jobId },
       include: { source: true, destination: true },
     });
+    if (!syncJob) {
+      // Sync job was deleted — silently discard this queued run
+      return { skipped: true, reason: 'Sync job no longer exists' };
+    }
 
     const run = await prisma.jobRun.create({
       data: { syncJobId: jobId, jobType: 'sync', status: 'running' },
@@ -36,9 +40,12 @@ export function startSyncWorker() {
 
       const scope = syncJob.scope as SyncScope;
       const srcAdmin = srcClient.db('admin');
+      const systemDbs = new Set(['admin', 'local', 'config']);
       const rawDbList: Array<{ name: string; collections?: string[] }> = scope.all
-        ? ((await srcAdmin.command({ listDatabases: 1 })).databases as Array<{ name: string }>).map((d) => ({ name: d.name }))
-        : (scope.databases ?? []);
+        ? ((await srcAdmin.command({ listDatabases: 1 })).databases as Array<{ name: string }>)
+            .filter((d) => !systemDbs.has(d.name))
+            .map((d) => ({ name: d.name }))
+        : (scope.databases ?? []).filter((d) => !systemDbs.has(d.name));
       const dbList = rawDbList;
 
       for (const dbDef of dbList) {
@@ -117,11 +124,19 @@ async function flushBatch(
   writeMode: string,
 ) {
   if (writeMode === 'upsert') {
+    // replaceOne with upsert:true — updates existing docs or inserts new ones
     const ops = batch.map((doc) => ({
       replaceOne: { filter: { _id: doc['_id'] }, replacement: doc, upsert: true },
     }));
     await coll.bulkWrite(ops as Parameters<typeof coll.bulkWrite>[0]);
   } else {
-    await coll.insertMany(batch as Parameters<typeof coll.insertMany>[0], { ordered: false }).catch(() => {});
+    // insertOnly / replace-after-drop: ordered:false so duplicates don't abort the batch
+    // Only swallow duplicate-key errors (11000); re-throw genuine failures
+    try {
+      await coll.insertMany(batch as Parameters<typeof coll.insertMany>[0], { ordered: false });
+    } catch (err: unknown) {
+      const code = (err as { code?: number })?.code;
+      if (code !== 11000) throw err; // re-throw non-duplicate errors
+    }
   }
 }

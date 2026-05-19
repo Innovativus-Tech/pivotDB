@@ -24,11 +24,28 @@ export function humanCron(expr: string): string {
   const parts = expr.trim().split(' ')
   if (parts.length !== 5) return expr
   const [min, hour, dom, month, dow] = parts
-  if (min === '0' && dom === '*' && month === '*' && dow === '*') {
-    return `Every day at ${hour}:00`
-  }
-  if (min === '0' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-    return 'Every hour'
-  }
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+  const pad = (n: string) => n.padStart(2, '0')
+
+  // Every N minutes: */N * * * *
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && month === '*' && dow === '*')
+    return `Every ${min.slice(2)} minutes`
+
+  // Every hour at minute N: N * * * *
+  if (!min.startsWith('*') && hour === '*' && dom === '*' && month === '*' && dow === '*')
+    return `Every hour at :${pad(min)}`
+
+  // Every day: M H * * *
+  if (dom === '*' && month === '*' && dow === '*')
+    return `Every day at ${pad(hour)}:${pad(min)}`
+
+  // Weekly: M H * * D
+  if (dom === '*' && month === '*' && dow !== '*')
+    return `Every ${days[+dow] ?? dow} at ${pad(hour)}:${pad(min)}`
+
+  // Monthly: M H D * *
+  if (dom !== '*' && month === '*' && dow === '*')
+    return `Every month on day ${dom} at ${pad(hour)}:${pad(min)}`
+
   return expr
 }

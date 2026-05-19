@@ -1,6 +1,8 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { Database, Search, BarChart3, ArrowLeftRight, Shield, Settings, LogOut } from 'lucide-react'
+import { Database, Search, BarChart3, ArrowLeftRight, Shield, Settings, LogOut, GitMerge } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../../stores/connections.store'
+import { api, type AlertRule } from '../../lib/api'
 import React from 'react'
 
 const navItems = [
@@ -8,13 +10,22 @@ const navItems = [
   { to: '/explore',      icon: Search,          label: 'Explore'     },
   { to: '/monitor',      icon: BarChart3,       label: 'Monitor'     },
   { to: '/move',         icon: ArrowLeftRight,  label: 'Move'        },
+  { to: '/migrate',      icon: GitMerge,        label: 'Migrate'     },
   { to: '/protect',      icon: Shield,          label: 'Protect'     },
   { to: '/settings',     icon: Settings,        label: 'Settings'    },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
-  const { clearAuth, user } = useAuthStore()
+  const { clearAuth, user, token } = useAuthStore()
+
+  const { data: active } = useQuery({
+    queryKey: ['alerts-active'],
+    queryFn: () => api.get<{ count: number; rules: AlertRule[] }>('/api/alerts/active'),
+    refetchInterval: 30_000,
+    enabled: !!token,
+  })
+  const activeCount = active?.count ?? 0
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -32,18 +43,35 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 py-4 space-y-1 px-2">
           {navItems.map(({ to, icon: Icon, label }) => {
             const active = location.pathname.startsWith(to)
+            const showAlertBadge = label === 'Monitor' && activeCount > 0
             return (
               <NavLink
                 key={to}
                 to={to}
-                className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
+                className={`relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
                   active
                     ? 'bg-primary/10 text-primary'
                     : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                 }`}
               >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className="hidden lg:block">{label}</span>
+                <div className="relative shrink-0">
+                  <Icon className="h-4 w-4" />
+                  {showAlertBadge && (
+                    <span
+                      title={`${activeCount} alert${activeCount === 1 ? '' : 's'} firing`}
+                      className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-1 rounded-full bg-destructive text-destructive-foreground text-[9px] font-bold flex items-center justify-center"
+                    >
+                      {activeCount > 9 ? '9+' : activeCount}
+                    </span>
+                  )}
+                </div>
+                <span className="hidden lg:block flex-1">{label}</span>
+                {showAlertBadge && (
+                  <span className="hidden lg:inline-flex relative h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-destructive" />
+                  </span>
+                )}
               </NavLink>
             )
           })}

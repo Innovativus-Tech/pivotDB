@@ -28,22 +28,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   get:    <T>(path: string) => request<T>(path),
-  post:   <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
-  put:    <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
+  post:   <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST',  ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
+  put:    <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT',   ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
+  patch:  <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
   delete: <T>(path: string, body?: unknown) => request<T>(path, { method: 'DELETE', body: body ? JSON.stringify(body) : undefined }),
 }
 
 // Auth helpers
 export async function login(email: string, password: string) {
-  const res = await api.post<{ token: string; user: { email: string; role: string } }>(
+  const res = await api.post<{ token: string; user: { id: string; email: string; role: string; profileId: string | null } }>(
     '/api/connections/auth/login', { email, password }
   )
   localStorage.setItem('token', res.token)
   return res
-}
-
-export async function register(email: string, password: string, role = 'admin') {
-  return api.post('/api/connections/auth/register', { email, password, role })
 }
 
 // Connection types
@@ -61,8 +58,9 @@ export interface Connection {
 export interface ExportJob {
   id: string
   connectionId: string
+  exportType?: string
   database: string
-  collection: string
+  collection: string | null
   format: string
   status: string
   fileKey?: string
@@ -82,33 +80,214 @@ export interface SyncJob {
 
 export interface BackupJob {
   id: string
+  name: string
   connectionId: string
-  s3DestId: string
+  connection?: { name: string }
+  databases: string[]
   schedule: string
-  scope: unknown
-  retentionPolicy: unknown
-  enabled: boolean
+  retentionDays: number
+  status: string         // active | paused
+  lastRunAt?: string
+  lastRunStatus?: string // success | failed | running
+  lastRunError?: string
   createdAt: string
+  updatedAt: string
 }
 
-export interface S3Destination {
+export interface BackupRun {
   id: string
-  connectionId: string
-  bucket: string
-  region: string
-  prefix: string
-  verifiedAt?: string
-  createdAt: string
+  jobId: string
+  status: string         // running | success | failed
+  startedAt: string
+  finishedAt?: string
+  sizeBytes?: number
+  filePath?: string
+  databases: string[]
+  errorMsg?: string
 }
+
+export interface MonitorSnapshot {
+  host: string
+  version: string
+  uptime: number
+  storageEngine: string
+  currentConnections: number
+  availableConnections: number
+  totalConnectionsCreated: number
+  opsPerSec: {
+    insert: number; query: number; update: number;
+    delete: number; getmore: number; command: number
+  }
+  memResident: number
+  memVirtual: number
+  networkBytesIn: number
+  networkBytesOut: number
+  networkRequests: number
+  wtCacheUsedMB: number
+  wtCacheMaxMB: number
+  wtCacheHitRatio: number
+  docsRead: number
+  docsInserted: number
+  docsUpdated: number
+  docsDeleted: number
+  replicaSet: {
+    name: string
+    myState: number
+    myStateName: string
+    members: Array<{
+      name: string
+      state: number
+      stateName: string
+      health: number
+      lagSeconds: number | null
+      self?: boolean
+    }>
+  } | null
+  activeAlerts: number
+  timestamp: string
+}
+
+export interface CurrentOp {
+  opid: string | number
+  type: string
+  ns: string
+  op: string
+  durationMs: number
+  client: string
+  desc: string
+  waitingForLock: boolean
+  query?: Record<string, unknown>
+  planSummary?: string
+}
+
+export interface SlowQuery {
+  op: string
+  ns: string
+  durationMs: number
+  keysExamined: number
+  docsExamined: number
+  docsReturned: number
+  query: Record<string, unknown>
+  planSummary: string
+  ts: string
+}
+
+export interface DbSize {
+  db: string
+  sizeOnDisk: number
+  collections: number
+  objects: number
+  dataSize: number
+  indexSize: number
+  storageSize: number
+}
+
+export interface CollSize {
+  name: string
+  count: number
+  size: number
+  avgObjSize: number
+  storageSize: number
+  totalIndexSize: number
+  nindexes: number
+}
+
+export interface RestoreRun {
+  id: string
+  backupRunId: string
+  targetConnectionId: string
+  profileId: string
+  status: string                 // queued | running | success | failed
+  startedAt?: string
+  finishedAt?: string
+  log?: string
+  createdAt: string
+  backupRun?: {
+    id: string
+    startedAt: string
+    sizeBytes?: number
+    jobId?: string
+    job?: { id: string; name: string }
+  }
+  targetConnection?: { id: string; name: string }
+}
+
+export interface MigrationJob {
+  id: string
+  name: string
+  sourceConnId: string
+  destConnId: string
+  scope: unknown
+  options: unknown
+  status: string
+  createdBy: string
+  createdAt: string
+  source?: { name: string }
+  destination?: { name: string }
+  runs?: MigrationRun[]
+}
+
+export interface MigrationRun {
+  id: string
+  jobId: string
+  startedAt: string
+  finishedAt?: string
+  status: string
+  phase?: string
+  logLines: string[]
+  errorReport?: unknown
+}
+
+export type AlertMetric =
+  | 'currentConnections' | 'availableConnections'
+  | 'memResident' | 'memVirtual'
+  | 'opsPerSecTotal' | 'replicationLag' | 'wtCachePercent'
+  | 'networkBytesIn' | 'networkBytesOut'
+
+export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte'
 
 export interface AlertRule {
   id: string
+  profileId: string
   connectionId: string
-  metric: string
-  condition: { operator: string; threshold: number }
-  durationSec: number
-  channels: Array<{ type: string; target: string }>
+  name: string
+  metric: AlertMetric
+  condition: AlertCondition
+  threshold: number
+  durationMinutes: number
   enabled: boolean
+  notifyEmail: string | null
+  notifyWebhook: string | null
+  status: 'ok' | 'firing' | 'paused'
+  firingStartedAt: string | null
+  lastEvaluatedAt: string | null
+  lastNotifiedAt: string | null
+  createdAt: string
+  updatedAt: string
+  // Augmented by GET /api/alerts/rules:
+  latestEvent?: AlertEvent | null
+  eventCount?: number
+  // Augmented by GET /api/alerts/active:
+  connection?: { id: string; name: string }
+}
+
+export interface AlertEvent {
+  id: string
+  ruleId: string
+  profileId: string
+  connectionId: string
+  metric: AlertMetric
+  value: number
+  threshold: number
+  condition: AlertCondition
+  status: 'firing' | 'resolved' | 'acknowledged'
+  firedAt: string
+  resolvedAt: string | null
+  acknowledgedAt: string | null
+  acknowledgedBy: string | null
+  note: string | null
+  notified: boolean
+  rule?: { id: string; name: string; metric: AlertMetric }
 }
 
 export interface SavedQuery {

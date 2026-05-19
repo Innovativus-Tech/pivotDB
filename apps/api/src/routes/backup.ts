@@ -1,139 +1,307 @@
 import { FastifyInstance } from 'fastify';
+import { createReadStream } from 'node:fs';
+import { rm, access } from 'node:fs/promises';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { backupQueue } from '../lib/queue.js';
-import { encrypt } from '../crypto/encrypt.js';
-import { getS3Client } from '../lib/s3.js';
-import { ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { backupQueue, restoreQueue } from '../lib/queue.js';
+import { profileScope, requireAdmin } from '../plugins/auth.js';
+import { scheduleBackupJob, reloadBackupJob, unscheduleBackupJob } from '../scheduler/index.js';
 
-const CreateDestBody = z.object({
+interface JWTUser {
+  userId: string; email: string; role: string; profileId: string | null;
+}
+
+const CreateJobBody = z.object({
+  name: z.string().min(1),
   connectionId: z.string(),
-  bucket: z.string(),
-  region: z.string(),
-  prefix: z.string().default(''),
-  credentials: z.object({
-    accessKeyId: z.string().optional(),
-    secretAccessKey: z.string().optional(),
-    roleArn: z.string().optional(),
-  }),
+  databases: z.array(z.string()).default([]),
+  schedule: z.string().min(1),
+  retentionDays: z.number().int().positive().default(30),
 });
 
-const CreateBackupJobBody = z.object({
-  connectionId: z.string(),
-  s3DestId: z.string(),
-  schedule: z.string(),
-  scope: z.unknown(),
-  retentionPolicy: z.unknown(),
-  enabled: z.boolean().default(true),
+const RestoreBody = z.object({
+  targetConnectionId: z.string().min(1),
+});
+
+const PatchJobBody = z.object({
+  name: z.string().min(1).optional(),
+  schedule: z.string().min(1).optional(),
+  databases: z.array(z.string()).optional(),
+  retentionDays: z.number().int().positive().optional(),
+  status: z.enum(['active', 'paused']).optional(),
 });
 
 export async function backupRoutes(app: FastifyInstance) {
   const opts = { preHandler: [app.authenticate] };
 
-  // S3 Destinations
-  app.post('/destinations', opts, async (req, reply) => {
-    const body = CreateDestBody.parse(req.body);
-    const encryptedCredentials = encrypt(JSON.stringify(body.credentials));
-    const dest = await prisma.s3Destination.create({
+  // ── List jobs ─────────────────────────────────────────────────────────────
+  app.get('/jobs', opts, async (req) => {
+    const scope = profileScope(req);
+    return prisma.backupJob.findMany({
+      where: scope,
+      orderBy: { createdAt: 'desc' },
+      include: { connection: { select: { name: true } } },
+    });
+  });
+
+  // ── Create job ────────────────────────────────────────────────────────────
+  app.post('/jobs', opts, async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const body = CreateJobBody.parse(req.body);
+    const user = req.user as JWTUser;
+
+    let profileId = user.profileId;
+    if (!profileId) {
+      const conn = await prisma.connection.findUnique({ where: { id: body.connectionId }, select: { profileId: true } });
+      profileId = conn?.profileId ?? null;
+    }
+    if (!profileId) return reply.code(400).send({ error: 'No profile assigned' });
+
+    const job = await prisma.backupJob.create({
       data: {
+        name: body.name,
         connectionId: body.connectionId,
-        bucket: body.bucket,
-        region: body.region,
-        prefix: body.prefix,
-        encryptedCredentials,
-        verifiedAt: new Date(),
+        profileId,
+        databases: body.databases,
+        schedule: body.schedule,
+        retentionDays: body.retentionDays,
+        status: 'active',
       },
     });
-    return reply.code(201).send({ ...dest, encryptedCredentials: undefined });
-  });
-
-  app.get('/destinations', opts, async () => {
-    const dests = await prisma.s3Destination.findMany();
-    return dests.map(({ encryptedCredentials: _, ...d }) => d);
-  });
-
-  app.delete('/destinations/:destId', opts, async (req, reply) => {
-    const { destId } = req.params as { destId: string };
-    await prisma.s3Destination.delete({ where: { id: destId } });
-    return reply.code(204).send();
-  });
-
-  // Backup Jobs
-  app.post('/jobs', opts, async (req, reply) => {
-    const body = CreateBackupJobBody.parse(req.body);
-    const job = await prisma.backupJob.create({ data: { ...body, scope: body.scope as object, retentionPolicy: body.retentionPolicy as object } });
+    // Register cron task immediately so the schedule fires without a server restart
+    scheduleBackupJob({ id: job.id, schedule: job.schedule });
     return reply.code(201).send(job);
   });
 
-  app.get('/jobs', opts, async () => {
-    return prisma.backupJob.findMany({ orderBy: { createdAt: 'desc' } });
+  // ── Update job (pause / resume / reschedule) ──────────────────────────────
+  app.patch('/jobs/:id', opts, async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const body = PatchJobBody.parse(req.body);
+    const scope = profileScope(req);
+
+    const existing = await prisma.backupJob.findFirst({ where: { id, ...scope } });
+    if (!existing) return reply.code(404).send({ error: 'Not found' });
+
+    const updated = await prisma.backupJob.update({ where: { id }, data: body });
+    // If schedule, status, or enabled-equivalent changed, re-register the cron task
+    reloadBackupJob({ id: updated.id, schedule: updated.schedule, status: updated.status });
+    return updated;
   });
 
-  app.get('/jobs/:jobId', opts, async (req, reply) => {
-    const { jobId } = req.params as { jobId: string };
-    const job = await prisma.backupJob.findUnique({ where: { id: jobId } });
-    if (!job) return reply.code(404).send({ error: 'Not found' });
-    return job;
-  });
+  // ── Delete job + all files ────────────────────────────────────────────────
+  app.delete('/jobs/:id', opts, async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
 
-  app.put('/jobs/:jobId', opts, async (req, reply) => {
-    const { jobId } = req.params as { jobId: string };
-    try {
-      return await prisma.backupJob.update({ where: { id: jobId }, data: req.body as Record<string, unknown> });
-    } catch {
-      return reply.code(404).send({ error: 'Not found' });
+    const existing = await prisma.backupJob.findFirst({ where: { id, ...scope } });
+    if (!existing) return reply.code(404).send({ error: 'Not found' });
+
+    // Delete all backup files from disk first
+    const runs = await prisma.backupRun.findMany({ where: { jobId: id }, select: { filePath: true } });
+    for (const run of runs) {
+      if (run.filePath) await rm(run.filePath, { force: true });
     }
-  });
 
-  app.delete('/jobs/:jobId', opts, async (req, reply) => {
-    const { jobId } = req.params as { jobId: string };
-    await prisma.backupJob.delete({ where: { id: jobId } });
+    // Stop the cron task so it doesn't keep firing for a deleted job
+    unscheduleBackupJob(id);
+    // Cascade deletes BackupRun rows automatically
+    await prisma.backupJob.delete({ where: { id } });
     return reply.code(204).send();
   });
 
-  app.post('/jobs/:jobId/run', opts, async (req, reply) => {
-    const { jobId } = req.params as { jobId: string };
-    await backupQueue.add('backup', { jobId });
-    return { queued: true };
-  });
+  // ── Trigger immediate run ─────────────────────────────────────────────────
+  app.post('/jobs/:id/run', opts, async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
 
-  app.get('/jobs/:jobId/catalog', opts, async (req, reply) => {
-    const { jobId } = req.params as { jobId: string };
-    const job = await prisma.backupJob.findUnique({ where: { id: jobId }, include: { s3Destination: true } });
+    const job = await prisma.backupJob.findFirst({ where: { id, ...scope } });
     if (!job) return reply.code(404).send({ error: 'Not found' });
-    const s3 = getS3Client(job.s3Destination.encryptedCredentials, job.s3Destination.region);
-    const result = await s3.send(new ListObjectsV2Command({
-      Bucket: job.s3Destination.bucket,
-      Prefix: `${job.s3Destination.prefix}${job.connectionId}/`,
-    }));
-    return result.Contents ?? [];
-  });
 
-  app.post('/jobs/:jobId/restore', opts, async (req, reply) => {
-    const { jobId } = req.params as { jobId: string };
-    const { artifactKey, destConnectionId, confirmed } = req.body as {
-      artifactKey: string; destConnectionId: string; confirmed: boolean;
-    };
-    if (!confirmed) return reply.code(400).send({ error: 'Confirmation required' });
-    const user = req.user as { email: string };
-    await prisma.auditEvent.create({
-      data: { actor: user.email, action: 'restore_backup', target: `backup:${artifactKey}`, metadata: { jobId, destConnectionId } },
+    await backupQueue.add('run', { backupJobId: id }, {
+      jobId: `backup-manual-${id}-${Date.now()}`,
     });
-    await backupQueue.add('restore', { jobId, artifactKey, destConnectionId });
     return { queued: true };
   });
 
-  app.delete('/catalog/:artifactKey', opts, async (req, reply) => {
-    const artifactKey = decodeURIComponent((req.params as { artifactKey: string }).artifactKey);
-    const { bucket, region, encryptedCredentials } = req.body as {
-      bucket: string; region: string; encryptedCredentials: string;
-    };
-    const user = req.user as { email: string };
-    await prisma.auditEvent.create({
-      data: { actor: user.email, action: 'delete_backup', target: `s3://${bucket}/${artifactKey}` },
+  // ── List runs for a job ───────────────────────────────────────────────────
+  app.get('/jobs/:id/runs', opts, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
+
+    const job = await prisma.backupJob.findFirst({ where: { id, ...scope } });
+    if (!job) return reply.code(404).send({ error: 'Not found' });
+
+    return prisma.backupRun.findMany({
+      where: { jobId: id },
+      orderBy: { startedAt: 'desc' },
+      take: 50,
     });
-    const s3 = getS3Client(encryptedCredentials, region);
-    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: artifactKey }));
-    return reply.code(204).send();
+  });
+
+  // ── Download a backup file ────────────────────────────────────────────────
+  app.get('/runs/:runId/download', opts, async (req, reply) => {
+    const { runId } = req.params as { runId: string };
+
+    const run = await prisma.backupRun.findUnique({
+      where: { id: runId },
+      include: { job: { select: { profileId: true } } },
+    });
+
+    if (!run || !run.filePath) return reply.code(404).send({ error: 'Not found' });
+
+    // Profile isolation check
+    const user = req.user as JWTUser;
+    if (user.role !== 'superadmin' && run.job.profileId !== user.profileId) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    if (run.status !== 'success') return reply.code(400).send({ error: 'Run not successful' });
+
+    try {
+      await access(run.filePath);
+    } catch {
+      return reply.code(404).send({ error: 'Backup file not found on disk' });
+    }
+
+    const filename = `backup-${runId}${run.filePath.endsWith('.enc') ? '.tar.gz.enc' : '.tar.gz'}`;
+    reply.header('Content-Type', 'application/octet-stream');
+    reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+    return reply.send(createReadStream(run.filePath));
+  });
+
+  // ── Trigger a restore from a backup run ───────────────────────────────────
+  app.post('/runs/:runId/restore', opts, async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const { runId } = req.params as { runId: string };
+    const body = RestoreBody.parse(req.body);
+    const user = req.user as JWTUser;
+
+    // 1. Find BackupRun + parent job
+    const run = await prisma.backupRun.findUnique({
+      where: { id: runId },
+      include: { job: { select: { profileId: true } } },
+    });
+    if (!run) return reply.code(404).send({ error: 'Backup run not found' });
+
+    // 2. Profile isolation
+    const profileId = user.role === 'superadmin' ? run.job.profileId : user.profileId;
+    if (user.role !== 'superadmin' && run.job.profileId !== user.profileId) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+    if (!profileId) return reply.code(400).send({ error: 'No profile assigned' });
+
+    // 3. Status + file checks
+    if (run.status !== 'success') {
+      return reply.code(400).send({ error: 'Backup run did not complete successfully' });
+    }
+    if (!run.filePath) {
+      return reply.code(400).send({ error: 'Backup file path missing' });
+    }
+    try {
+      await access(run.filePath);
+    } catch {
+      return reply.code(404).send({ error: 'Backup file not found on disk' });
+    }
+
+    // 4. Verify target connection belongs to this profile
+    const target = await prisma.connection.findFirst({
+      where: { id: body.targetConnectionId, profileId },
+      select: { id: true },
+    });
+    if (!target) return reply.code(404).send({ error: 'Target connection not found' });
+
+    // 5. Concurrent-restore guard
+    const inflight = await prisma.restoreRun.findFirst({
+      where: { backupRunId: runId, status: { in: ['queued', 'running'] } },
+      select: { id: true },
+    });
+    if (inflight) {
+      return reply.code(409).send({ error: 'A restore is already in progress for this backup' });
+    }
+
+    // 6. Create RestoreRun
+    const record = await prisma.restoreRun.create({
+      data: {
+        backupRunId: runId,
+        targetConnectionId: body.targetConnectionId,
+        profileId,
+        status: 'queued',
+      },
+    });
+
+    // 7. Enqueue
+    await restoreQueue.add(
+      'run',
+      { restoreRunId: record.id },
+      { jobId: `restore-${record.id}` },
+    );
+
+    return reply.code(202).send({ restoreRunId: record.id, status: 'queued' });
+  });
+
+  // ── Poll a single restore run ─────────────────────────────────────────────
+  app.get('/restore/:restoreRunId', opts, async (req, reply) => {
+    const { restoreRunId } = req.params as { restoreRunId: string };
+    const user = req.user as JWTUser;
+
+    const restoreRun = await prisma.restoreRun.findUnique({
+      where: { id: restoreRunId },
+      include: {
+        backupRun: { select: { id: true, startedAt: true, sizeBytes: true, jobId: true } },
+        targetConnection: { select: { id: true, name: true } },
+      },
+    });
+    if (!restoreRun) return reply.code(404).send({ error: 'Not found' });
+
+    if (user.role !== 'superadmin' && restoreRun.profileId !== user.profileId) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    return restoreRun;
+  });
+
+  // ── Restore history for a backup job ──────────────────────────────────────
+  app.get('/jobs/:id/restores', opts, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
+
+    const job = await prisma.backupJob.findFirst({ where: { id, ...scope } });
+    if (!job) return reply.code(404).send({ error: 'Not found' });
+
+    return prisma.restoreRun.findMany({
+      where: { backupRun: { jobId: id } },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: {
+        backupRun: { select: { id: true, startedAt: true, sizeBytes: true } },
+        targetConnection: { select: { id: true, name: true } },
+      },
+    });
+  });
+
+  // ── All restore runs across all jobs in the profile (for Catalog tab) ─────
+  app.get('/restores', opts, async (req) => {
+    const user = req.user as JWTUser;
+    const where = user.role === 'superadmin' ? {} : { profileId: user.profileId ?? '__none__' };
+
+    return prisma.restoreRun.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: {
+        backupRun: {
+          select: {
+            id: true,
+            startedAt: true,
+            sizeBytes: true,
+            job: { select: { id: true, name: true } },
+          },
+        },
+        targetConnection: { select: { id: true, name: true } },
+      },
+    });
   });
 }

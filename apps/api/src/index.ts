@@ -14,16 +14,32 @@ import { exportRoutes } from './routes/export.js';
 import { syncRoutes } from './routes/sync.js';
 import { backupRoutes } from './routes/backup.js';
 import { alertRoutes } from './routes/alerts.js';
+import { migrationRoutes } from './routes/migration.js';
 import { startExportWorker } from './jobs/export.job.js';
 import { startSyncWorker } from './jobs/sync.job.js';
 import { startBackupWorker } from './jobs/backup.job.js';
+import { startRestoreWorker } from './jobs/restore.job.js';
+import { startMigrationWorker } from './jobs/migration.job.js';
 import { startScheduler } from './scheduler/index.js';
 import { prisma } from './lib/prisma.js';
 import { closeAllClients } from './lib/mongo.js';
 
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
 
-const app = Fastify({ logger: { level: process.env.NODE_ENV === 'production' ? 'warn' : 'info' } });
+const app = Fastify({
+  logger: { level: process.env.NODE_ENV === 'production' ? 'warn' : 'info' },
+  // BigInt (e.g. sizeBytes on BackupRun) is not natively serializable by JSON
+  serializerOpts: {
+    rounding: 'round',
+  },
+});
+
+// Serialize BigInt as a regular number in all JSON responses
+app.addHook('preSerialization', async (_req, _reply, payload) => {
+  return JSON.parse(JSON.stringify(payload, (_k, v) =>
+    typeof v === 'bigint' ? Number(v) : v
+  ));
+});
 
 // Core plugins
 await app.register(cors, { origin: true });
@@ -45,6 +61,7 @@ await app.register(async (api) => {
     await sub.register(syncRoutes,       { prefix: '/sync' });
     await sub.register(backupRoutes,     { prefix: '/backup' });
     await sub.register(alertRoutes,      { prefix: '/alerts' });
+    await sub.register(migrationRoutes,  { prefix: '/migration' });
   }));
 }, { prefix: '/api' });
 
@@ -82,9 +99,17 @@ registerMonitorSocket(app);
 startExportWorker();
 startSyncWorker();
 startBackupWorker();
+startRestoreWorker();
 
-// Start scheduler
-startScheduler();
+// Migration worker — emits socket events on progress
+const io = (app as unknown as { io: { emit: (ev: string, ...args: unknown[]) => void } }).io;
+startMigrationWorker(
+  (jobId, phase, line) => { try { io?.emit(`migration:log:${jobId}`, { phase, line }); } catch (_) { /* noop */ } },
+  (jobId) => { try { io?.emit(`migration:done:${jobId}`, {}); } catch (_) { /* noop */ } },
+);
+
+// Start scheduler (async — loads backup jobs from DB on startup)
+await startScheduler();
 
 // Graceful shutdown
 const shutdown = async () => {

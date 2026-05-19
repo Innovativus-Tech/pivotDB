@@ -3,15 +3,16 @@ import { exportQueue } from '../lib/queue.js';
 
 export async function createExportJob(data: {
   connectionId: string;
+  profileId: string;
   database: string;
-  collection: string;
+  collection?: string;
   query: unknown;
   isPipeline: boolean;
   format: 'csv' | 'json';
   options: Record<string, unknown>;
   destination?: string;
 }) {
-  const job = await prisma.exportJob.create({ data: { ...data, query: data.query as object, options: data.options as object } });
+  const job = await prisma.exportJob.create({ data: { ...data, collection: data.collection ?? null, query: data.query as object, options: data.options as object } });
   await exportQueue.add('export', { jobId: job.id });
   return job;
 }

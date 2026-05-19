@@ -7,6 +7,36 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Profile {
+  id          String   @id @default(cuid())
+  name        String
+  adminId     String   @unique
+  createdAt   DateTime @default(now())
+
+  users         User[]
+  connections   Connection[]
+  syncJobs      SyncJob[]
+  backupJobs    BackupJob[]
+  migrationJobs MigrationJob[]
+  exportJobs    ExportJob[]
+  alertRules    AlertRule[]
+  alertEvents   AlertEvent[]
+  savedQueries  SavedQuery[]
+  restoreRuns   RestoreRun[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         String    @default("viewer")
+  profileId    String?
+  profile      Profile?  @relation(fields: [profileId], references: [id])
+  invitedBy    String?
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+}
+
 model Connection {
   id             String   @id @default(cuid())
   name           String
@@ -15,45 +45,70 @@ model Connection {
   tags           String[]
   readOnly       Boolean  @default(false)
   createdBy      String
+  profileId      String
+  profile        Profile  @relation(fields: [profileId], references: [id])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  s3Destinations  S3Destination[]
-  backupJobs      BackupJob[]
-  syncJobsSource  SyncJob[]     @relation("SyncSource")
-  syncJobsDest    SyncJob[]     @relation("SyncDest")
-  exportJobs      ExportJob[]
-  alertRules      AlertRule[]
-  savedQueries    SavedQuery[]
-}
-
-model S3Destination {
-  id                   String      @id @default(cuid())
-  connectionId         String
-  connection           Connection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  bucket               String
-  region               String
-  prefix               String      @default("")
-  encryptedCredentials String
-  verifiedAt           DateTime?
-  createdAt            DateTime    @default(now())
-
-  backupJobs  BackupJob[]
+  backupJobs          BackupJob[]
+  syncJobsSource      SyncJob[]      @relation("SyncSource")
+  syncJobsDest        SyncJob[]      @relation("SyncDest")
+  exportJobs          ExportJob[]
+  alertRules          AlertRule[]
+  savedQueries        SavedQuery[]
+  migrationJobsSource MigrationJob[] @relation("MigrationSource")
+  migrationJobsDest   MigrationJob[] @relation("MigrationDest")
+  restoreRuns         RestoreRun[]   @relation("RestoreTargetConnection")
 }
 
 model BackupJob {
-  id              String        @id @default(cuid())
-  connectionId    String
-  connection      Connection    @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  s3DestId        String
-  s3Destination   S3Destination @relation(fields: [s3DestId], references: [id])
-  schedule        String
-  scope           Json
-  retentionPolicy Json
-  enabled         Boolean       @default(true)
-  createdAt       DateTime      @default(now())
+  id            String      @id @default(cuid())
+  profileId     String
+  profile       Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  connectionId  String
+  connection    Connection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  name          String
+  databases     String[]    @default([])
+  schedule      String
+  retentionDays Int         @default(30)
+  status        String      @default("active")
+  lastRunAt     DateTime?
+  lastRunStatus String?
+  lastRunError  String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
-  runs  JobRun[]
+  runs BackupRun[]
+}
+
+model BackupRun {
+  id         String    @id @default(cuid())
+  jobId      String
+  job        BackupJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status     String
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  sizeBytes  BigInt?
+  filePath   String?
+  databases  String[]  @default([])
+  errorMsg   String?
+
+  restoreRuns RestoreRun[]
+}
+
+model RestoreRun {
+  id                 String     @id @default(cuid())
+  backupRunId        String
+  backupRun          BackupRun  @relation(fields: [backupRunId], references: [id], onDelete: Cascade)
+  targetConnectionId String
+  targetConnection   Connection @relation("RestoreTargetConnection", fields: [targetConnectionId], references: [id], onDelete: Cascade)
+  profileId          String
+  profile            Profile    @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  status             String     @default("queued") // queued | running | success | failed
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  log                String?
+  createdAt          DateTime   @default(now())
 }
 
 model SyncJob {
@@ -61,7 +116,9 @@ model SyncJob {
   sourceConnId String
   source       Connection @relation("SyncSource", fields: [sourceConnId], references: [id], onDelete: Cascade)
   destConnId   String
-  destination  Connection @relation("SyncDest",   fields: [destConnId],   references: [id], onDelete: Cascade)
+  destination  Connection @relation("SyncDest", fields: [destConnId], references: [id], onDelete: Cascade)
+  profileId    String
+  profile      Profile    @relation(fields: [profileId], references: [id])
   scope        Json
   writeMode    String
   schedule     String?
@@ -69,15 +126,18 @@ model SyncJob {
   enabled      Boolean    @default(true)
   createdAt    DateTime   @default(now())
 
-  runs  JobRun[]
+  runs JobRun[]
 }
 
 model ExportJob {
   id           String     @id @default(cuid())
   connectionId String
   connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  profileId    String
+  profile      Profile    @relation(fields: [profileId], references: [id])
+  exportType   String     @default("collection")
   database     String
-  collection   String
+  collection   String?
   query        Json
   isPipeline   Boolean    @default(false)
   format       String
@@ -87,56 +147,108 @@ model ExportJob {
   fileKey      String?
   createdAt    DateTime   @default(now())
 
-  runs  JobRun[]
+  runs JobRun[]
+}
+
+model MigrationJob {
+  id           String     @id @default(cuid())
+  name         String
+  sourceConnId String
+  source       Connection @relation("MigrationSource", fields: [sourceConnId], references: [id], onDelete: Cascade)
+  destConnId   String
+  destination  Connection @relation("MigrationDest", fields: [destConnId], references: [id], onDelete: Cascade)
+  profileId    String
+  profile      Profile    @relation(fields: [profileId], references: [id])
+  scope        Json
+  options      Json
+  status       String     @default("pending")
+  tempDirPath  String?
+  createdBy    String
+  createdAt    DateTime   @default(now())
+
+  runs MigrationRun[]
+}
+
+model MigrationRun {
+  id            String       @id @default(cuid())
+  jobId         String
+  job           MigrationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  startedAt     DateTime     @default(now())
+  finishedAt    DateTime?
+  status        String
+  phase         String?
+  dumpSizeBytes Int?
+  counts        Json?
+  errorReport   Json?
+  logLines      String[]
 }
 
 model JobRun {
-  id           String    @id @default(cuid())
-  jobType      String
-  startedAt    DateTime  @default(now())
-  finishedAt   DateTime?
-  status       String
-  counts       Json?
-  errorReport  Json?
+  id          String    @id @default(cuid())
+  jobType     String
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  status      String
+  counts      Json?
+  errorReport Json?
 
-  backupJobId  String?
-  backupJob    BackupJob?  @relation(fields: [backupJobId], references: [id])
+  syncJobId   String?
+  syncJob     SyncJob?   @relation(fields: [syncJobId], references: [id])
 
-  syncJobId    String?
-  syncJob      SyncJob?    @relation(fields: [syncJobId], references: [id])
-
-  exportJobId  String?
-  exportJob    ExportJob?  @relation(fields: [exportJobId], references: [id])
+  exportJobId String?
+  exportJob   ExportJob? @relation(fields: [exportJobId], references: [id])
 }
 
 model AlertRule {
-  id           String     @id @default(cuid())
-  connectionId String
-  connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  metric       String
-  condition    Json
-  durationSec  Int
-  channels     Json
-  enabled      Boolean    @default(true)
-  createdAt    DateTime   @default(now())
+  id               String       @id @default(cuid())
+  profileId        String
+  profile          Profile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  connectionId     String
+  connection       Connection   @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  name             String
+  metric           String       // currentConnections | availableConnections | memResident | memVirtual | opsPerSecTotal | replicationLag | wtCachePercent | networkBytesIn | networkBytesOut
+  condition        String       // gt | lt | gte | lte
+  threshold        Float
+  durationMinutes  Int          @default(1)
+  enabled          Boolean      @default(true)
+  notifyEmail      String?
+  notifyWebhook    String?
+  status           String       @default("ok")  // ok | firing | paused
+  firingStartedAt  DateTime?
+  lastEvaluatedAt  DateTime?
+  lastNotifiedAt   DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
-  events  AlertEvent[]
+  events AlertEvent[]
 }
 
 model AlertEvent {
-  id           String    @id @default(cuid())
-  ruleId       String
-  rule         AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  firedAt      DateTime  @default(now())
-  resolvedAt   DateTime?
-  acknowledged Boolean   @default(false)
-  note         String?
+  id             String    @id @default(cuid())
+  ruleId         String
+  rule           AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  profileId      String
+  profile        Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  connectionId   String
+  metric         String
+  value          Float
+  threshold      Float
+  condition      String
+  status         String    @default("firing") // firing | resolved | acknowledged
+  firedAt        DateTime  @default(now())
+  resolvedAt     DateTime?
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  note           String?
+  notified       Boolean   @default(false)
 }
 
 model SavedQuery {
   id           String     @id @default(cuid())
   connectionId String
   connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  profileId    String
+  profile      Profile    @relation(fields: [profileId], references: [id])
   name         String
   database     String
   collection   String
@@ -152,12 +264,4 @@ model AuditEvent {
   target    String
   timestamp DateTime @default(now())
   metadata  Json?
-}
-
-model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  role         String   @default("viewer")
-  createdAt    DateTime @default(now())
 }

@@ -135,8 +135,11 @@ export async function exploreRoutes(app: FastifyInstance) {
       query: z.unknown(),
       isPipeline: z.boolean().default(false),
     }).parse(req.body);
+    const user = req.user as { userId: string; email: string; role: string; profileId: string | null };
+    const profileId = user.profileId;
+    if (!profileId) return reply.code(400).send({ error: 'No profile assigned' });
     const saved = await prisma.savedQuery.create({
-      data: { connectionId: id, ...body, query: body.query as object },
+      data: { connectionId: id, profileId, ...body, query: body.query as object },
     });
     return reply.code(201).send(saved);
   });

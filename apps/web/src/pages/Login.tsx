@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Database } from 'lucide-react'
-import { login, register } from '../lib/api'
+import { login } from '../lib/api'
 import { useAuthStore } from '../stores/connections.store'
 
 export function LoginPage() {
@@ -11,23 +11,15 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [mode, setMode] = useState<'login' | 'register'>('login')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setError('')
     try {
-      if (mode === 'login') {
-        const res = await login(email, password)
-        setAuth(res.token, res.user)
-        navigate('/connections')
-      } else {
-        await register(email, password, 'admin')
-        const res = await login(email, password)
-        setAuth(res.token, res.user)
-        navigate('/connections')
-      }
+      const res = await login(email, password)
+      setAuth(res.token, res.user)
+      navigate('/connections')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed')
     } finally {
@@ -75,15 +67,8 @@ export function LoginPage() {
             disabled={loading}
             className="w-full py-2 bg-primary text-primary-foreground text-sm font-medium rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
-            {loading ? 'Please wait…' : mode === 'login' ? 'Sign In' : 'Create Account'}
+            {loading ? 'Please wait…' : 'Sign In'}
           </button>
-          <p className="text-center text-xs text-muted-foreground">
-            {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-            <button type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-              className="text-primary hover:underline">
-              {mode === 'login' ? 'Create one' : 'Sign in'}
-            </button>
-          </p>
         </form>
       </div>
     </div>

@@ -98,6 +98,42 @@ export class MetricsService {
     }
   }
 
+  /**
+   * Push gauge updates from a live MonitorSnapshot. Called by the
+   * /:id/monitor/snapshot route so the UI's 5s poll also keeps Prometheus
+   * fresh for actively-viewed connections (the 15s prom scrape covers idle ones).
+   */
+  updateFromSnapshot(connectionId: string, connectionName: string, snapshot: {
+    currentConnections: number; availableConnections: number;
+    opsPerSec: { insert: number; query: number; update: number; delete: number; getmore: number };
+    memResident: number; memVirtual: number;
+    networkBytesIn: number; networkBytesOut: number;
+    wtCacheUsedMB: number; wtCacheMaxMB: number;
+    replicaSet: { members: Array<{ name: string; lagSeconds: number | null }> } | null;
+  }): void {
+    const lbs = { connection_id: connectionId, connection_name: connectionName };
+    this.connectionsCurrentGauge.set(lbs, snapshot.currentConnections);
+    this.connectionsAvailableGauge.set(lbs, snapshot.availableConnections);
+    this.opsInsertGauge.set(lbs, snapshot.opsPerSec.insert);
+    this.opsQueryGauge.set(lbs, snapshot.opsPerSec.query);
+    this.opsUpdateGauge.set(lbs, snapshot.opsPerSec.update);
+    this.opsDeleteGauge.set(lbs, snapshot.opsPerSec.delete);
+    this.opsGetmoreGauge.set(lbs, snapshot.opsPerSec.getmore);
+    this.memResidentMbGauge.set(lbs, snapshot.memResident);
+    this.memVirtualMbGauge.set(lbs, snapshot.memVirtual);
+    this.networkBytesInGauge.set(lbs, snapshot.networkBytesIn);
+    this.networkBytesOutGauge.set(lbs, snapshot.networkBytesOut);
+    this.wtCacheUsedBytesGauge.set(lbs, snapshot.wtCacheUsedMB * 1024 * 1024);
+    this.wtCacheMaxBytesGauge.set(lbs, snapshot.wtCacheMaxMB * 1024 * 1024);
+    if (snapshot.replicaSet) {
+      for (const m of snapshot.replicaSet.members) {
+        if (m.lagSeconds !== null) {
+          this.replicationLagSecondsGauge.set({ ...lbs, member: m.name }, m.lagSeconds);
+        }
+      }
+    }
+  }
+
   async getMetrics(): Promise<string> {
     await this.collectAll();
     return this.registry.metrics();

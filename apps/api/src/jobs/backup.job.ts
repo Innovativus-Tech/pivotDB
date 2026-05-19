@@ -1,169 +1,167 @@
 import { Worker, Job } from 'bullmq';
-import { createWriteStream, mkdirSync, createReadStream, statSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdir, rm, stat } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
+import { createCipheriv, randomBytes, CipherGCM } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import path from 'node:path';
-import { pipeline as streamPipeline } from 'node:stream/promises';
-import { createHash, createCipheriv, randomBytes } from 'node:crypto';
 import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../crypto/encrypt.js';
-import { getFreshClient } from '../lib/mongo.js';
-import { getS3Client } from '../lib/s3.js';
-import { Upload } from '@aws-sdk/lib-storage';
-import { ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
-const TEMP_DIR = process.env.TEMP_DIR ?? '/tmp/mongovis';
-const ALGORITHM = 'aes-256-gcm';
+const execFileAsync = promisify(execFile);
 
-function getEncKey(): Buffer {
-  return Buffer.from(process.env.ENCRYPTION_KEY!, 'hex');
-}
-
-async function encryptFile(inputPath: string, outputPath: string): Promise<string> {
-  const iv     = randomBytes(12);
-  const cipher = createCipheriv(ALGORITHM, getEncKey(), iv);
-  const hash   = createHash('sha256');
-
-  const inStream  = createReadStream(inputPath);
-  const outStream = createWriteStream(outputPath);
-
-  outStream.write(iv);
-  await streamPipeline(
-    inStream,
-    cipher,
-    outStream,
-  );
-
-  const tag = cipher.getAuthTag();
-  await new Promise<void>((res, rej) => outStream.write(tag, (err) => err ? rej(err) : res()));
-  await new Promise<void>((res, rej) => outStream.end((err?: Error | null) => err ? rej(err) : res()));
-
-  const fileBuffer = await import('node:fs/promises').then((fs) => fs.readFile(outputPath));
-  hash.update(fileBuffer);
-  return hash.digest('hex');
-}
+const BACKUP_BASE_DIR = process.env.BACKUP_DIR ?? '/app/backups';
+const ENCRYPTION_KEY_HEX = process.env.BACKUP_ENCRYPTION_KEY;
 
 export function startBackupWorker() {
-  return new Worker('backup', async (job: Job) => {
-    const { jobId } = job.data as { jobId: string };
+  const worker = new Worker(
+    'backup',
+    async (job: Job) => {
+      const { backupJobId } = job.data as { backupJobId: string };
 
-    const backupJob = await prisma.backupJob.findUniqueOrThrow({
-      where: { id: jobId },
-      include: { connection: true, s3Destination: true },
-    });
+      const backupJob = await prisma.backupJob.findUnique({
+        where: { id: backupJobId },
+        include: { connection: true },
+      });
+      if (!backupJob) return; // stale job — ignore
 
-    const run = await prisma.jobRun.create({
-      data: { backupJobId: jobId, jobType: 'backup', status: 'running' },
-    });
+      // Create run record
+      const run = await prisma.backupRun.create({
+        data: { jobId: backupJobId, status: 'running', databases: backupJob.databases },
+      });
 
-    const workDir = path.join(TEMP_DIR, `backup_${jobId}_${Date.now()}`);
-    mkdirSync(workDir, { recursive: true });
+      // Mark job as running
+      await prisma.backupJob.update({
+        where: { id: backupJobId },
+        data: { lastRunAt: new Date(), lastRunStatus: 'running' },
+      });
 
-    try {
-      const uri    = decrypt(backupJob.connection.encryptedUri);
-      const client = await getFreshClient(uri);
-      const scope  = backupJob.scope as { all?: boolean; databases?: string[] };
-      const admin  = client.db('admin');
+      const tempDir = path.join('/tmp', `backup-${run.id}`);
+      const dumpDir = path.join(tempDir, 'dump');
+      const outputDir = path.join(BACKUP_BASE_DIR, backupJob.profileId);
+      const ext = ENCRYPTION_KEY_HEX ? '.tar.gz.enc' : '.tar.gz';
+      const archivePath = path.join(outputDir, `${run.id}${ext}`);
 
-      const dbNames = scope.all
-        ? ((await admin.command({ listDatabases: 1 })).databases as Array<{ name: string }>).map((d) => d.name)
-        : (scope.databases ?? []);
+      try {
+        // Step 1: Create temp + output dirs
+        await mkdir(dumpDir, { recursive: true });
+        await mkdir(outputDir, { recursive: true });
 
-      for (const dbName of dbNames) {
-        const dbDir = path.join(workDir, dbName);
-        mkdirSync(dbDir, { recursive: true });
-        const colls = await client.db(dbName).listCollections().toArray();
-        for (const coll of colls) {
-          const filePath  = path.join(dbDir, `${coll.name}.ndjson`);
-          const fileStream = createWriteStream(filePath);
-          const cursor = client.db(dbName).collection(coll.name).find();
-          for await (const doc of cursor) {
-            fileStream.write(JSON.stringify(doc) + '\n');
+        // Step 2: Decrypt MongoDB URI
+        const uri = decrypt(backupJob.connection.encryptedUri);
+        const tlsInsecure = uri.startsWith('mongodb+srv://');
+
+        // Step 3: Run mongodump
+        const baseDumpArgs = [
+          '--uri', uri,
+          '--out', dumpDir,
+          '--gzip',
+          ...(tlsInsecure ? ['--tlsInsecure'] : []),
+        ];
+
+        if (backupJob.databases.length > 0) {
+          // Dump each selected database separately
+          for (const db of backupJob.databases) {
+            await execFileAsync('mongodump', [...baseDumpArgs, '--db', db]);
           }
-          await new Promise<void>((res, rej) => fileStream.end((err?: Error | null) => err ? rej(err) : res()));
+        } else {
+          // Dump everything
+          await execFileAsync('mongodump', baseDumpArgs);
         }
+
+        // Step 4: tar the dump directory
+        const tarPath = path.join(tempDir, 'backup.tar');
+        await execFileAsync('tar', ['-cf', tarPath, '-C', tempDir, 'dump']);
+
+        // Step 5: gzip + optional AES-256-GCM encryption → final archive
+        const readStream = createReadStream(tarPath);
+        const gzip = createGzip();
+        const writeStream = createWriteStream(archivePath);
+
+        if (ENCRYPTION_KEY_HEX) {
+          const iv = randomBytes(12);
+          const key = Buffer.from(ENCRYPTION_KEY_HEX, 'hex');
+          const cipher = createCipheriv('aes-256-gcm', key, iv) as CipherGCM;
+
+          // Append the 16-byte GCM auth tag as the very last bytes of the file.
+          // File format: [12 bytes IV][encrypted gzipped tar][16 bytes auth tag]
+          // We use a pass-through Transform whose flush() emits the auth tag so
+          // pipeline() writes it before closing the write stream.
+          const appendAuthTag = new Transform({
+            transform(chunk, _enc, cb) { cb(null, chunk); },
+            flush(cb) { cb(null, cipher.getAuthTag()); },
+          });
+
+          // Prepend IV as first 12 bytes so decrypt can extract it
+          writeStream.write(iv);
+          await pipeline(readStream, gzip, cipher, appendAuthTag, writeStream);
+        } else {
+          await pipeline(readStream, gzip, writeStream);
+        }
+
+        // Step 6: Get file size
+        const fileStats = await stat(archivePath);
+
+        // Step 7: Mark run as success
+        await prisma.backupRun.update({
+          where: { id: run.id },
+          data: {
+            status: 'success',
+            finishedAt: new Date(),
+            sizeBytes: fileStats.size,
+            filePath: archivePath,
+          },
+        });
+
+        await prisma.backupJob.update({
+          where: { id: backupJobId },
+          data: { lastRunStatus: 'success', lastRunError: null },
+        });
+
+        // Step 8: Enforce strict retention — keep only the 3 most recent successful runs
+        const allSuccessfulRuns = await prisma.backupRun.findMany({
+          where: { jobId: backupJobId, status: 'success' },
+          orderBy: { startedAt: 'desc' },
+          select: { id: true, filePath: true, startedAt: true },
+        });
+
+        const runsToDelete = allSuccessfulRuns.slice(3);
+        for (const old of runsToDelete) {
+          if (old.filePath) {
+            await rm(old.filePath, { force: true }).catch(() => { /* file already gone */ });
+          }
+          await prisma.backupRun.delete({ where: { id: old.id } }).catch(() => { /* row already gone */ });
+        }
+
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+
+        await prisma.backupRun.update({
+          where: { id: run.id },
+          data: { status: 'failed', finishedAt: new Date(), errorMsg: message },
+        });
+
+        await prisma.backupJob.update({
+          where: { id: backupJobId },
+          data: { lastRunStatus: 'failed', lastRunError: message },
+        });
+
+        throw err;
+      } finally {
+        // Always clean up temp directory
+        await rm(tempDir, { recursive: true, force: true });
       }
-
-      await client.close();
-
-      const tarPath  = path.join(TEMP_DIR, `backup_${jobId}.tar.gz`);
-      const encPath  = tarPath + '.enc';
-
-      // Create tar.gz using Node.js streams
-      const { create } = await import('tar');
-      await create({ gzip: true, cwd: TEMP_DIR, file: tarPath }, [path.basename(workDir)]);
-      const checksum = await encryptFile(tarPath, encPath);
-
-      const s3   = getS3Client(backupJob.s3Destination.encryptedCredentials, backupJob.s3Destination.region);
-      const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const key  = `${backupJob.s3Destination.prefix}${backupJob.connectionId}/${ts}.archive.enc`;
-
-      const upload = new Upload({
-        client: s3,
-        params: {
-          Bucket: backupJob.s3Destination.bucket,
-          Key: key,
-          Body: createReadStream(encPath),
-          Metadata: { checksum },
-          Tagging: `checksum=${checksum}`,
-        },
-      });
-      await upload.done();
-
-      await applyRetention(s3, backupJob.s3Destination.bucket,
-        `${backupJob.s3Destination.prefix}${backupJob.connectionId}/`,
-        backupJob.retentionPolicy as Record<string, unknown>,
-        backupJob.id,
-      );
-
-      const encStat = statSync(encPath);
-      await prisma.jobRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'success',
-          finishedAt: new Date(),
-          counts: { s3Key: key, checksum, bytes: encStat.size },
-        },
-      });
-    } catch (err) {
-      await prisma.jobRun.update({
-        where: { id: run.id },
-        data: { status: 'failed', finishedAt: new Date(), errorReport: { error: String(err) } },
-      });
-      throw err;
-    } finally {
-      await rm(workDir, { recursive: true, force: true }).catch(() => {});
-    }
-  }, { connection: redis });
-}
-
-async function applyRetention(
-  s3: ReturnType<typeof getS3Client>,
-  bucket: string,
-  prefix: string,
-  policy: Record<string, unknown>,
-  jobId: string,
-) {
-  const list = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
-  const objects = (list.Contents ?? []).sort((a, b) =>
-    (a.LastModified?.getTime() ?? 0) - (b.LastModified?.getTime() ?? 0),
+    },
+    { connection: redis },
   );
 
-  let toDelete: typeof objects = [];
+  worker.on('failed', (job, err) => {
+    console.error(`[BackupWorker] Job ${job?.id} failed:`, err.message);
+  });
 
-  if (typeof policy['keepN'] === 'number') {
-    const excess = objects.length - policy['keepN'];
-    if (excess > 0) toDelete = objects.slice(0, excess);
-  } else if (typeof policy['olderThanDays'] === 'number') {
-    const cutoff = Date.now() - policy['olderThanDays'] * 86400_000;
-    toDelete = objects.filter((o) => (o.LastModified?.getTime() ?? 0) < cutoff);
-  }
-
-  for (const obj of toDelete) {
-    if (!obj.Key) continue;
-    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }));
-    await prisma.auditEvent.create({
-      data: { actor: 'system', action: 'delete_backup', target: `s3://${bucket}/${obj.Key}`, metadata: { jobId } },
-    });
-  }
+  return worker;
 }

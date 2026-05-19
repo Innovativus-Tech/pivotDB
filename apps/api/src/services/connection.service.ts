@@ -10,6 +10,7 @@ export interface ConnectionPublic {
   tags: string[];
   readOnly: boolean;
   createdBy: string;
+  profileId: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -34,7 +35,7 @@ export async function detectTopology(uri: string): Promise<{ topology: string; v
 
 export function sanitizeConnection(conn: {
   id: string; name: string; topology: string; tags: string[];
-  readOnly: boolean; createdBy: string; createdAt: Date; updatedAt: Date;
+  readOnly: boolean; createdBy: string; profileId: string; createdAt: Date; updatedAt: Date;
 }): ConnectionPublic {
   return {
     id: conn.id,
@@ -43,13 +44,14 @@ export function sanitizeConnection(conn: {
     tags: conn.tags,
     readOnly: conn.readOnly,
     createdBy: conn.createdBy,
+    profileId: conn.profileId,
     createdAt: conn.createdAt,
     updatedAt: conn.updatedAt,
   };
 }
 
 export async function createConnection(data: {
-  name: string; uri: string; tags: string[]; readOnly: boolean; createdBy: string;
+  name: string; uri: string; tags: string[]; readOnly: boolean; createdBy: string; profileId: string;
 }): Promise<ConnectionPublic> {
   const { topology } = await detectTopology(data.uri);
   const conn = await prisma.connection.create({
@@ -60,32 +62,37 @@ export async function createConnection(data: {
       tags: data.tags,
       readOnly: data.readOnly,
       createdBy: data.createdBy,
+      profileId: data.profileId,
     },
   });
   return sanitizeConnection(conn);
 }
 
-export async function listConnections(): Promise<ConnectionPublic[]> {
-  const conns = await prisma.connection.findMany({ orderBy: { createdAt: 'desc' } });
+export async function listConnections(scope: Record<string, unknown> = {}): Promise<ConnectionPublic[]> {
+  const conns = await prisma.connection.findMany({ where: scope, orderBy: { createdAt: 'desc' } });
   return conns.map(sanitizeConnection);
 }
 
-export async function getConnection(id: string): Promise<ConnectionPublic | null> {
-  const conn = await prisma.connection.findUnique({ where: { id } });
+export async function getConnection(id: string, scope: Record<string, unknown> = {}): Promise<ConnectionPublic | null> {
+  const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
   return conn ? sanitizeConnection(conn) : null;
 }
 
 export async function updateConnection(id: string, data: {
   name?: string; tags?: string[]; readOnly?: boolean;
-}): Promise<ConnectionPublic> {
+}, scope: Record<string, unknown> = {}): Promise<ConnectionPublic> {
+  const existing = await prisma.connection.findFirst({ where: { id, ...scope } });
+  if (!existing) throw new Error('Not found');
   const conn = await prisma.connection.update({ where: { id }, data });
   return sanitizeConnection(conn);
 }
 
-export async function deleteConnection(id: string, actor: string): Promise<void> {
+export async function deleteConnection(id: string, actor: string, scope: Record<string, unknown> = {}): Promise<void> {
+  const existing = await prisma.connection.findFirst({ where: { id, ...scope } });
+  if (!existing) throw new Error('Not found');
   await prisma.$transaction(async (tx) => {
     await tx.syncJob.updateMany({ where: { OR: [{ sourceConnId: id }, { destConnId: id }] }, data: { enabled: false } });
-    await tx.backupJob.updateMany({ where: { connectionId: id }, data: { enabled: false } });
+    await tx.backupJob.updateMany({ where: { connectionId: id }, data: { status: 'paused' } });
     await tx.auditEvent.create({
       data: { actor, action: 'delete_connection', target: `connection:${id}` },
     });

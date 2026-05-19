@@ -33,6 +33,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
+      target: production
     ports:
       - "3001:3001"
     environment:
@@ -43,6 +44,10 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       JWT_SECRET: ${JWT_SECRET}
       TEMP_DIR: /tmp/mongovis
+      BACKUP_DIR: /app/backups
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+    volumes:
+      - backup-data:/app/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,8 +90,9 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
+      target: production
     ports:
-      - "3000:80"
+      - "3002:80"
     environment:
       VITE_API_URL: http://localhost:3001
       VITE_GRAFANA_URL: http://localhost:3003
@@ -98,3 +104,4 @@ volumes:
   redis-data:
   prometheus-data:
   grafana-data:
+  backup-data:
