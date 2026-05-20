@@ -64,8 +64,10 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -107,3 +109,7 @@ volumes:
   prometheus-data:
   grafana-data:
   backup-data:
+
+configs:
+  prometheus_config:
+    file: ./config/prometheus/prometheus.yml
