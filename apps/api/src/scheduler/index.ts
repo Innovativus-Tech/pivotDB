@@ -4,52 +4,55 @@ import { syncQueue, backupQueue } from '../lib/queue.js';
 import { evaluateAlerts } from '../lib/alertEvaluator.js';
 import { getSnapshot } from '../services/monitor.service.js';
 
-// Map of jobId → cron task (for backup jobs)
-const backupTasks = new Map<string, cron.ScheduledTask>();
+// ── Backup scheduling via BullMQ repeatable jobs ──────────────────────────────
+// BullMQ stores repeatable jobs in Redis (persistent, survives restarts).
+// This is more reliable than in-memory node-cron tasks which can ghost-fire
+// after a schedule change if stop()/destroy() races with the event loop.
 
-export function scheduleBackupJob(job: { id: string; schedule: string }) {
-  // Cancel any existing task for this job
-  unscheduleBackupJob(job.id);
+export async function scheduleBackupJob(job: { id: string; schedule: string }) {
+  await unscheduleBackupJob(job.id); // remove any existing repeatable for this job
 
   if (!cron.validate(job.schedule)) {
     console.warn(`[scheduler] Invalid cron for backup job ${job.id}: ${job.schedule}`);
     return;
   }
 
-  const task = cron.schedule(job.schedule, async () => {
-    await backupQueue.add('run', { backupJobId: job.id }, {
-      jobId: `backup-sched-${job.id}-${Date.now()}`,
-    }).catch((err) => console.error(`[scheduler] backup enqueue error:`, err));
-  });
+  await backupQueue.add(
+    'run',
+    { backupJobId: job.id },
+    {
+      repeat: { pattern: job.schedule },
+      // Embed the backup-job ID so we can find + remove it later
+      jobId: `backup-repeat-${job.id}`,
+    },
+  );
 
-  backupTasks.set(job.id, task);
-  console.log(`[scheduler] registered backup job ${job.id} → ${job.schedule}`);
+  console.log(`[scheduler] scheduled backup job ${job.id} → ${job.schedule}`);
 }
 
-export function unscheduleBackupJob(jobId: string) {
-  const existing = backupTasks.get(jobId);
-  if (existing) {
-    existing.stop();
-    // destroy() removes all internal references so the old timer
-    // cannot fire again even if the GC hasn't collected it yet.
-    try { (existing as unknown as { destroy(): void }).destroy(); } catch (_) { /* older versions */ }
-    backupTasks.delete(jobId);
+export async function unscheduleBackupJob(jobId: string) {
+  const repeatableJobs = await backupQueue.getRepeatableJobs();
+  for (const r of repeatableJobs) {
+    // Match by the jobId we embedded OR by key containing the job id
+    if (r.id === `backup-repeat-${jobId}` || r.key.includes(jobId)) {
+      await backupQueue.removeRepeatableByKey(r.key);
+      console.log(`[scheduler] removed repeatable backup job ${jobId}`);
+    }
   }
 }
 
-export function reloadBackupJob(job: { id: string; schedule: string; status: string }) {
+export async function reloadBackupJob(job: { id: string; schedule: string; status: string }) {
   if (job.status === 'active') {
-    scheduleBackupJob(job);
+    await scheduleBackupJob(job);
   } else {
-    unscheduleBackupJob(job.id);
+    await unscheduleBackupJob(job.id);
   }
 }
+
+// ── Startup ───────────────────────────────────────────────────────────────────
 
 export async function startScheduler() {
   // Background alert evaluation safety net (every 30s).
-  // The Monitor UI's 5s snapshot poll already evaluates alerts in real time
-  // for the actively-viewed connection; this loop covers connections that
-  // nobody is currently watching so backend rules still fire.
   cron.schedule('*/30 * * * * *', async () => {
     try {
       const profiles = await prisma.alertRule.groupBy({
@@ -69,7 +72,7 @@ export async function startScheduler() {
     }
   });
 
-  // Register sync jobs via BullMQ repeat (stateless — BullMQ manages the schedule)
+  // Sync jobs via BullMQ repeat (stateless — BullMQ manages the schedule)
   cron.schedule('*/5 * * * *', async () => {
     const syncJobs = await prisma.syncJob.findMany({
       where: { enabled: true, schedule: { not: null } },
@@ -84,14 +87,28 @@ export async function startScheduler() {
     }
   });
 
-  // Load all active backup jobs and register their cron tasks on startup
+  // ── Register backup jobs as BullMQ repeatable jobs on startup ────────────────
   const activeBackups = await prisma.backupJob.findMany({
     where: { status: 'active' },
     select: { id: true, schedule: true },
   });
 
+  const activeIds = new Set(activeBackups.map(j => j.id));
+
+  // Prune stale repeatable jobs from Redis that no longer exist in DB
+  const existing = await backupQueue.getRepeatableJobs();
+  for (const r of existing) {
+    if (!r.id) continue;
+    const match = r.id.match(/^backup-repeat-(.+)$/);
+    if (match && !activeIds.has(match[1])) {
+      await backupQueue.removeRepeatableByKey(r.key);
+      console.log(`[scheduler] pruned stale repeatable job ${r.id}`);
+    }
+  }
+
+  // Schedule all active backup jobs
   for (const job of activeBackups) {
-    scheduleBackupJob(job);
+    await scheduleBackupJob(job);
   }
 
   console.log(`[scheduler] started — ${activeBackups.length} backup job(s) registered`);

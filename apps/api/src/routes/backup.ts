@@ -68,8 +68,8 @@ export async function backupRoutes(app: FastifyInstance) {
         status: 'active',
       },
     });
-    // Register cron task immediately so the schedule fires without a server restart
-    scheduleBackupJob({ id: job.id, schedule: job.schedule });
+    // Register repeatable job in BullMQ/Redis so the schedule fires without a server restart
+    await scheduleBackupJob({ id: job.id, schedule: job.schedule });
     return reply.code(201).send(job);
   });
 
@@ -84,8 +84,8 @@ export async function backupRoutes(app: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: 'Not found' });
 
     const updated = await prisma.backupJob.update({ where: { id }, data: body });
-    // If schedule, status, or enabled-equivalent changed, re-register the cron task
-    reloadBackupJob({ id: updated.id, schedule: updated.schedule, status: updated.status });
+    // Update the BullMQ repeatable job to match the new schedule/status
+    await reloadBackupJob({ id: updated.id, schedule: updated.schedule, status: updated.status });
     return updated;
   });
 
@@ -104,8 +104,8 @@ export async function backupRoutes(app: FastifyInstance) {
       if (run.filePath) await rm(run.filePath, { force: true });
     }
 
-    // Stop the cron task so it doesn't keep firing for a deleted job
-    unscheduleBackupJob(id);
+    // Remove the BullMQ repeatable job so it stops firing
+    await unscheduleBackupJob(id);
     // Cascade deletes BackupRun rows automatically
     await prisma.backupJob.delete({ where: { id } });
     return reply.code(204).send();
