@@ -17,13 +17,19 @@ FROM node:20-bookworm-slim AS production
 
 WORKDIR /app
 
-# Install mongodump / mongorestore (mongodb-database-tools)
-RUN apt-get update && apt-get install -y wget gnupg curl && \
-  wget -qO - https://www.mongodb.org/static/pgp/server-7.0.asc | apt-key add - && \
-  echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 multiverse" \
+# Install mongodump / mongorestore (mongodb-database-tools).
+# Notes:
+#   - Debian's repo component is `main`, NOT `multiverse` (that's Ubuntu).
+#   - `apt-key` is deprecated in Debian 12; use a keyring file + signed-by instead.
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
+  install -d -m 0755 /etc/apt/keyrings && \
+  curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc \
+    | gpg --dearmor -o /etc/apt/keyrings/mongodb-server-7.0.gpg && \
+  echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
     > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
   apt-get update && \
-  apt-get install -y mongodb-database-tools && \
+  apt-get install -y --no-install-recommends mongodb-database-tools && \
   rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm
@@ -44,13 +50,19 @@ FROM node:20-bookworm-slim AS development
 
 WORKDIR /app
 
-# Install mongodump / mongorestore (mongodb-database-tools)
-RUN apt-get update && apt-get install -y wget gnupg curl && \
-  wget -qO - https://www.mongodb.org/static/pgp/server-7.0.asc | apt-key add - && \
-  echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 multiverse" \
+# Install mongodump / mongorestore (mongodb-database-tools).
+# Notes:
+#   - Debian's repo component is `main`, NOT `multiverse` (that's Ubuntu).
+#   - `apt-key` is deprecated in Debian 12; use a keyring file + signed-by instead.
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
+  install -d -m 0755 /etc/apt/keyrings && \
+  curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc \
+    | gpg --dearmor -o /etc/apt/keyrings/mongodb-server-7.0.gpg && \
+  echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
     > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
   apt-get update && \
-  apt-get install -y mongodb-database-tools && \
+  apt-get install -y --no-install-recommends mongodb-database-tools && \
   rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm
