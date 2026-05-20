@@ -42,7 +42,11 @@ COPY --from=build /app/prisma ./prisma
 
 # Re-generate Prisma client in the production stage so the binary is built
 # against this stage's glibc and pnpm's node_modules layout is correct.
-RUN pnpm exec prisma generate
+# prisma CLI is a devDep so not present after --prod install; add it
+# temporarily, generate, then remove it to keep the image lean.
+RUN pnpm add prisma --save-dev --no-frozen-lockfile && \
+    pnpm exec prisma generate && \
+    pnpm remove prisma
 
 EXPOSE 3001
 
