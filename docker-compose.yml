@@ -91,6 +91,8 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       target: production
+      args:
+        VITE_GRAFANA_URL: ${VITE_GRAFANA_URL}
     ports:
       - "3002:80"
     environment:

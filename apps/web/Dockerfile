@@ -3,6 +3,9 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
+ARG VITE_GRAFANA_URL
+ENV VITE_GRAFANA_URL=$VITE_GRAFANA_URL
+
 RUN npm install -g pnpm
 
 COPY package.json pnpm-lock.yaml* ./
