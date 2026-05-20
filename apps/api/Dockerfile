@@ -32,21 +32,17 @@ RUN apt-get update && \
   apt-get install -y --no-install-recommends mongodb-database-tools && \
   rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm
-
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --prod --no-frozen-lockfile --unsafe-perm
-
+# Copy the entire node_modules from the build stage (includes prisma CLI and
+# all prod deps). Both stages use the same base image so native binaries are
+# compatible. This avoids a second pnpm install and any network calls here.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 
-# Re-generate Prisma client in the production stage so the binary is built
-# against this stage's glibc and pnpm's node_modules layout is correct.
-# prisma CLI is a devDep so not present after --prod install; add it
-# temporarily, generate, then remove it to keep the image lean.
-RUN pnpm add prisma --save-dev --no-frozen-lockfile && \
-    pnpm exec prisma generate && \
-    pnpm remove prisma
+# Re-generate the Prisma client so the query-engine binary is linked against
+# this stage's glibc (same image, so it's a no-op rebuild — fast and safe).
+RUN node_modules/.bin/prisma generate
 
 EXPOSE 3001
 
