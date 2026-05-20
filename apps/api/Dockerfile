@@ -39,7 +39,10 @@ RUN pnpm install --prod --no-frozen-lockfile --unsafe-perm
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
-COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
+
+# Re-generate Prisma client in the production stage so the binary is built
+# against this stage's glibc and pnpm's node_modules layout is correct.
+RUN pnpm exec prisma generate
 
 EXPOSE 3001
 
