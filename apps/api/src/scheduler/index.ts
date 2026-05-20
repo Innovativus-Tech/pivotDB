@@ -30,6 +30,9 @@ export function unscheduleBackupJob(jobId: string) {
   const existing = backupTasks.get(jobId);
   if (existing) {
     existing.stop();
+    // destroy() removes all internal references so the old timer
+    // cannot fire again even if the GC hasn't collected it yet.
+    try { (existing as unknown as { destroy(): void }).destroy(); } catch (_) { /* older versions */ }
     backupTasks.delete(jobId);
   }
 }
