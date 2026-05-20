@@ -60,14 +60,13 @@ services:
       retries: 3
 
   prometheus:
-    image: prom/prometheus:latest
+    build:
+      context: ./config/prometheus
+      dockerfile: Dockerfile
     ports:
       - "9090:9090"
     volumes:
       - prometheus-data:/prometheus
-    configs:
-      - source: prometheus_config
-        target: /etc/prometheus/prometheus.yml
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -110,6 +109,3 @@ volumes:
   grafana-data:
   backup-data:
 
-configs:
-  prometheus_config:
-    file: ./config/prometheus/prometheus.yml
