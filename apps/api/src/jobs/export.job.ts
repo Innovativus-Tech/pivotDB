@@ -3,7 +3,7 @@ import { createWriteStream, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { pipeline } from 'node:stream/promises';
+import { pipeline, finished } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import path from 'node:path';
 import { stringify } from 'csv-stringify';
@@ -154,9 +154,8 @@ async function runDatabaseExport(jobId: string) {
           out.write(first ? json : ',\n' + json);
           first = false;
         });
-        await new Promise<void>((res, rej) => {
-          out.end(first ? ']' : '\n]', (err) => err ? rej(err) : res());
-        });
+        out.end(first ? ']' : '\n]');
+        await finished(out);
 
       } else {
         // CSV — load docs, build header + rows
