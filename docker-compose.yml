@@ -73,7 +73,9 @@ services:
       - '--storage.tsdb.retention.time=30d'
 
   grafana:
-    image: grafana/grafana:11.0.0
+    build:
+      context: ./config/grafana
+      dockerfile: Dockerfile
     ports:
       - "3003:3000"
     environment:
@@ -82,8 +84,6 @@ services:
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./config/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
-      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
 
