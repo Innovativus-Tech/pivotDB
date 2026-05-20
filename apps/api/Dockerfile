@@ -46,7 +46,9 @@ RUN node_modules/.bin/prisma generate
 
 EXPOSE 3001
 
-CMD ["node", "dist/index.js"]
+# Run migrations then start the server. migrate deploy is idempotent so it's
+# safe on every restart and eliminates the need for a separate post-deploy step.
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node dist/index.js"]
 
 # ---- Development stage ----
 FROM node:20-bookworm-slim AS development
