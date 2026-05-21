@@ -78,15 +78,28 @@ const CRON_PRESETS = [
 export function ProtectPage() {
   const [tab, setTab] = useState<'jobs' | 'catalog'>('jobs')
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Protect</h1>
-      <div className="flex gap-1 border-b border-border mb-6">
-        {(['jobs', 'catalog'] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-2 text-sm capitalize ${tab === t ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'}`}>
-            {t === 'jobs' ? 'Backup Jobs' : 'Catalog'}
-          </button>
-        ))}
+    <div style={{ padding: 24, maxWidth: 1152, margin: '0 auto' }}>
+      <h1 style={{ margin: '0 0 24px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-1)' }}>
+        Protect
+      </h1>
+      <div style={{
+        display: 'flex', gap: 4, marginBottom: 24,
+        borderBottom: '1px solid var(--border-soft)',
+      }}>
+        {(['jobs', 'catalog'] as const).map((t) => {
+          const on = tab === t
+          return (
+            <button key={t} onClick={() => setTab(t)}
+              style={{
+                padding: '8px 16px', fontSize: 13,
+                border: 'none', background: 'transparent',
+                cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize',
+                color: on ? 'var(--accent)' : 'var(--text-3)',
+                borderBottom: `2px solid ${on ? 'var(--accent)' : 'transparent'}`,
+                marginBottom: -1,
+              }}>{t === 'jobs' ? 'Backup Jobs' : 'Catalog'}</button>
+          )
+        })}
       </div>
       {tab === 'jobs'    && <BackupJobsTab />}
       {tab === 'catalog' && <CatalogTab />}

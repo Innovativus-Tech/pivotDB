@@ -1,23 +1,41 @@
-import { NavLink, useLocation } from 'react-router-dom'
-import { Database, Search, BarChart3, ArrowLeftRight, Shield, Settings, LogOut, GitMerge } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
+import {
+  Database, Search, BarChart3, ArrowLeftRight, Shield, Settings as SettingsIcon, LogOut, GitMerge,
+  Sun, Moon,
+  type LucideIcon,
+} from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '../../stores/connections.store'
 import { api, type AlertRule } from '../../lib/api'
-import React from 'react'
+import React, { useState, type CSSProperties } from 'react'
+import { useTheme } from '../../hooks/useTheme'
 
-const navItems = [
-  { to: '/connections',  icon: Database,        label: 'Connections' },
-  { to: '/explore',      icon: Search,          label: 'Explore'     },
-  { to: '/monitor',      icon: BarChart3,       label: 'Monitor'     },
-  { to: '/move',         icon: ArrowLeftRight,  label: 'Move'        },
-  { to: '/migrate',      icon: GitMerge,        label: 'Migrate'     },
-  { to: '/protect',      icon: Shield,          label: 'Protect'     },
-  { to: '/settings',     icon: Settings,        label: 'Settings'    },
+interface NavItem {
+  to: string
+  icon: LucideIcon
+  label: string
+}
+interface NavGroup { label: string; items: NavItem[] }
+
+const NAV_GROUPS: NavGroup[] = [
+  { label: 'Data', items: [
+    { to: '/connections', icon: Database, label: 'Connections' },
+    { to: '/explore',     icon: Search,   label: 'Explore' },
+  ]},
+  { label: 'Operate', items: [
+    { to: '/monitor', icon: BarChart3,      label: 'Monitor' },
+    { to: '/move',    icon: ArrowLeftRight, label: 'Move' },
+    { to: '/migrate', icon: GitMerge,       label: 'Migrate' },
+  ]},
+  { label: 'Governance', items: [
+    { to: '/protect',  icon: Shield,      label: 'Protect' },
+    { to: '/settings', icon: SettingsIcon,label: 'Settings' },
+  ]},
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const location = useLocation()
   const { clearAuth, user, token } = useAuthStore()
+  const [theme, , toggleTheme] = useTheme()
 
   const { data: active } = useQuery({
     queryKey: ['alerts-active'],
@@ -28,76 +46,162 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const activeCount = active?.count ?? 0
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Sidebar */}
-      <aside className="w-16 lg:w-56 flex flex-col border-r border-border bg-card shrink-0">
-        {/* Logo */}
-        <div className="h-14 flex items-center px-4 border-b border-border">
-          <Database className="h-5 w-5 text-primary shrink-0" />
-          <span className="ml-3 font-semibold text-sm hidden lg:block text-foreground">
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--canvas)' }}>
+      <Sidebar
+        user={user}
+        activeCount={activeCount}
+        onSignOut={clearAuth}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+      <main style={{ flex: 1, overflow: 'auto' }}>{children}</main>
+    </div>
+  )
+}
+
+/* ---------------- Sidebar ---------------- */
+function Sidebar({ user, activeCount, onSignOut, theme, onToggleTheme }: {
+  user: { email?: string; role?: string } | null
+  activeCount: number
+  onSignOut: () => void
+  theme: 'light' | 'dark'
+  onToggleTheme: () => void
+}) {
+  return (
+    <aside style={{
+      width: 224, flexShrink: 0,
+      background: 'var(--rail)',
+      borderRight: '1px solid var(--border-soft)',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      {/* Brand */}
+      <div style={{
+        height: 56, padding: '0 16px',
+        display: 'flex', alignItems: 'center', gap: 10,
+        borderBottom: '1px solid var(--border-soft)',
+      }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: 6,
+          background: 'var(--accent)', color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: 14, letterSpacing: '-0.04em',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15)',
+          flexShrink: 0,
+        }}>m</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             MongoDB Visualizer
-          </span>
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 py-4 space-y-1 px-2">
-          {navItems.map(({ to, icon: Icon, label }) => {
-            const active = location.pathname.startsWith(to)
-            const showAlertBadge = label === 'Monitor' && activeCount > 0
-            return (
-              <NavLink
-                key={to}
-                to={to}
-                className={`relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
-                  active
-                    ? 'bg-primary/10 text-primary'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                }`}
-              >
-                <div className="relative shrink-0">
-                  <Icon className="h-4 w-4" />
-                  {showAlertBadge && (
-                    <span
-                      title={`${activeCount} alert${activeCount === 1 ? '' : 's'} firing`}
-                      className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-1 rounded-full bg-destructive text-destructive-foreground text-[9px] font-bold flex items-center justify-center"
-                    >
-                      {activeCount > 9 ? '9+' : activeCount}
-                    </span>
-                  )}
-                </div>
-                <span className="hidden lg:block flex-1">{label}</span>
-                {showAlertBadge && (
-                  <span className="hidden lg:inline-flex relative h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-destructive" />
-                  </span>
-                )}
-              </NavLink>
-            )
-          })}
-        </nav>
-
-        {/* User */}
-        <div className="px-3 py-4 border-t border-border">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-xs text-primary font-medium shrink-0">
-              {user?.email?.[0]?.toUpperCase() ?? 'U'}
-            </div>
-            <div className="hidden lg:block flex-1 min-w-0">
-              <p className="text-xs text-foreground truncate">{user?.email ?? 'User'}</p>
-              <p className="text-xs text-muted-foreground capitalize">{user?.role ?? 'viewer'}</p>
-            </div>
-            <button onClick={clearAuth} className="hidden lg:flex text-muted-foreground hover:text-foreground transition-colors">
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         </div>
-      </aside>
+      </div>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        {children}
-      </main>
-    </div>
+      {/* Nav */}
+      <nav style={{ flex: 1, overflow: 'auto', padding: '14px 8px' }}>
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.label} style={{ marginBottom: gi < NAV_GROUPS.length - 1 ? 18 : 0 }}>
+            <div style={{
+              padding: '4px 10px',
+              fontSize: 10, fontWeight: 600,
+              color: 'var(--text-3)',
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+            }}>{group.label}</div>
+            <div style={{ marginTop: 2 }}>
+              {group.items.map(it => (
+                <SidebarLink
+                  key={it.to}
+                  to={it.to}
+                  Icon={it.icon}
+                  label={it.label}
+                  badgeCount={it.label === 'Monitor' ? activeCount : 0}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      {/* User */}
+      <div style={{
+        padding: '12px 14px',
+        borderTop: '1px solid var(--border-soft)',
+        display: 'flex', alignItems: 'center', gap: 9,
+      }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: 999,
+          background: 'var(--accent-soft-2)', color: 'var(--accent)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 12, fontWeight: 600, flexShrink: 0,
+        }}>{user?.email?.[0]?.toUpperCase() ?? 'U'}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email ?? 'User'}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{user?.role ?? 'viewer'}</div>
+        </div>
+        <button
+          onClick={onToggleTheme}
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          style={iconBtnSm}
+        >
+          {theme === 'dark'
+            ? <Sun size={13} style={{ color: 'var(--text-3)' }}/>
+            : <Moon size={13} style={{ color: 'var(--text-3)' }}/>}
+        </button>
+        <button onClick={onSignOut} title="Sign out" style={iconBtnSm}>
+          <LogOut size={13} style={{ color: 'var(--text-3)' }}/>
+        </button>
+      </div>
+    </aside>
+  )
+}
+
+const iconBtnSm: CSSProperties = {
+  background: 'transparent', border: 'none', padding: 4, borderRadius: 4, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+}
+
+function SidebarLink({
+  to, Icon, label, badgeCount = 0,
+}: {
+  to: string
+  Icon: LucideIcon
+  label: string
+  badgeCount?: number
+}) {
+  const [hover, setHover] = useState(false)
+  return (
+    <NavLink to={to}>
+      {({ isActive }) => (
+        <div
+          onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+          style={{
+            position: 'relative',
+            width: '100%', textAlign: 'left',
+            display: 'flex', alignItems: 'center', gap: 9,
+            padding: '6px 10px',
+            cursor: 'pointer',
+            background: isActive ? 'var(--accent-soft)' : hover ? 'rgba(20,18,14,0.04)' : 'transparent',
+            color: isActive ? 'var(--accent)' : 'var(--text-2)',
+            fontSize: 13, fontWeight: isActive ? 500 : 400,
+            borderRadius: 'var(--radius)',
+            transition: 'background 80ms, color 80ms',
+          }}>
+          {isActive && (
+            <span style={{
+              position: 'absolute', left: -8, top: 6, bottom: 6,
+              width: 2, background: 'var(--accent)', borderRadius: 2,
+            }}/>
+          )}
+          <Icon size={14}/>
+          <span style={{ flex: 1 }}>{label}</span>
+          {badgeCount > 0 && (
+            <span style={{
+              fontSize: 10, fontWeight: 700,
+              background: 'var(--danger)', color: '#fff',
+              padding: '1px 5px', borderRadius: 999,
+              minWidth: 16, textAlign: 'center', lineHeight: 1.3,
+            }}>{badgeCount > 9 ? '9+' : badgeCount}</span>
+          )}
+        </div>
+      )}
+    </NavLink>
   )
 }

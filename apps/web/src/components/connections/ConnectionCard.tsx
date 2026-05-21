@@ -10,10 +10,10 @@ interface Props {
   onEdit: (conn: Connection) => void
 }
 
-const topologyColors: Record<string, string> = {
-  standalone:  'bg-blue-500/10 text-blue-400',
-  replicaSet:  'bg-purple-500/10 text-purple-400',
-  sharded:     'bg-orange-500/10 text-orange-400',
+const topologyTone: Record<string, { bg: string; fg: string; bd: string }> = {
+  standalone: { bg: 'var(--rail)',         fg: 'var(--text-2)',  bd: 'var(--border-soft)' },
+  replicaSet: { bg: 'var(--accent-soft)',  fg: 'var(--accent)',  bd: 'var(--accent-soft-2)' },
+  sharded:    { bg: 'var(--warn-soft)',    fg: 'var(--warn)',    bd: 'var(--warn-soft)' },
 }
 
 export function ConnectionCard({ connection, onEdit }: Props) {
@@ -23,6 +23,7 @@ export function ConnectionCard({ connection, onEdit }: Props) {
   const [testResult, setTestResult] = useState<{ latencyMs: number; serverVersion: string } | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+  const [hover, setHover] = useState(false)
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/api/connections/${connection.id}`),
@@ -49,63 +50,92 @@ export function ConnectionCard({ connection, onEdit }: Props) {
   }
 
   const isActive = activeConnectionId === connection.id
+  const topology = topologyTone[connection.topology] ?? topologyTone.standalone
 
   return (
     <>
       <div
-        className={`bg-card border rounded-lg p-5 cursor-pointer transition-all hover:border-primary/50 ${
-          isActive ? 'border-primary ring-1 ring-primary/30' : 'border-border'
-        }`}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
         onClick={() => setActiveConnection(connection.id)}
+        style={{
+          background: 'var(--surface)',
+          border: `1px solid ${isActive ? 'var(--accent)' : hover ? 'var(--border-strong)' : 'var(--border-soft)'}`,
+          boxShadow: isActive
+            ? '0 0 0 1px var(--accent), var(--shadow-1)'
+            : 'var(--shadow-1)',
+          borderRadius: 'var(--radius-lg)',
+          padding: 20,
+          cursor: 'pointer',
+          transition: 'border-color 120ms, box-shadow 120ms',
+        }}
       >
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex-1 min-w-0">
-            <h3 className="font-medium text-foreground truncate">{connection.name}</h3>
-            <div className="flex flex-wrap gap-1 mt-1">
-              <span className={`text-xs px-1.5 py-0.5 rounded ${topologyColors[connection.topology] ?? 'bg-muted text-muted-foreground'}`}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h3 style={{
+              margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--text-1)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{connection.name}</h3>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+              <span style={{
+                fontSize: 11, padding: '2px 7px', borderRadius: 999,
+                background: topology.bg, color: topology.fg,
+                border: `1px solid ${topology.bd}`,
+              }}>
                 {connection.topology}
               </span>
               {connection.readOnly && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400">read-only</span>
+                <span style={{
+                  fontSize: 11, padding: '2px 7px', borderRadius: 999,
+                  background: 'var(--warn-soft)', color: 'var(--warn)',
+                  border: '1px solid var(--warn-soft)',
+                }}>read-only</span>
               )}
               {connection.tags.map((tag) => (
-                <span key={tag} className="text-xs px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{tag}</span>
+                <span key={tag} style={{
+                  fontSize: 11, padding: '2px 7px', borderRadius: 999,
+                  background: 'var(--rail)', color: 'var(--text-3)',
+                  border: '1px solid var(--border-soft)',
+                }}>{tag}</span>
               ))}
             </div>
           </div>
-          {isActive && <Zap className="h-4 w-4 text-primary shrink-0 ml-2" />}
+          {isActive && <Zap size={16} style={{ color: 'var(--accent)', flexShrink: 0, marginLeft: 8 }}/>}
         </div>
 
         {testResult && (
-          <p className="text-xs text-green-400 mb-2">
+          <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--success)' }}>
             v{testResult.serverVersion} · {testResult.latencyMs}ms
           </p>
         )}
         {testError && (
-          <p className="text-xs text-red-400 mb-2 truncate">{testError}</p>
+          <p style={{
+            margin: '0 0 8px', fontSize: 12, color: 'var(--danger)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{testError}</p>
         )}
 
-        <div className="flex gap-2 mt-3">
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button
             onClick={(e) => { e.stopPropagation(); handleTest() }}
             disabled={testing}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors disabled:opacity-50"
+            style={cardActionBtn(testing)}
           >
-            <TestTube2 className="h-3 w-3" />
+            <TestTube2 size={12}/>
             {testing ? 'Testing…' : 'Test'}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onEdit(connection) }}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+            style={cardActionBtn()}
           >
-            <Edit2 className="h-3 w-3" />
+            <Edit2 size={12}/>
             Edit
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); setDeleting(true) }}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/50 transition-colors ml-auto"
+            style={{ ...cardActionBtn(), marginLeft: 'auto' }}
           >
-            <Trash2 className="h-3 w-3" />
+            <Trash2 size={12}/>
             Delete
           </button>
         </div>
@@ -124,4 +154,17 @@ export function ConnectionCard({ connection, onEdit }: Props) {
       />
     </>
   )
+}
+
+function cardActionBtn(disabled = false): React.CSSProperties {
+  return {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    fontSize: 12, padding: '4px 10px',
+    background: 'var(--surface)', color: 'var(--text-2)',
+    border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+    fontFamily: 'inherit',
+    transition: 'background 80ms, border-color 80ms, color 80ms',
+  }
 }

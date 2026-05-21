@@ -15,65 +15,84 @@ export function ConnectionsPage() {
   })
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div style={{ padding: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Connections</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-1)' }}>
+            Connections
+          </h1>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-3)' }}>
             Manage your MongoDB deployments
           </p>
         </div>
         <button
           onClick={() => setAddOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-md hover:bg-primary/90 transition-colors"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '8px 14px', fontSize: 13, fontWeight: 500,
+            background: 'var(--accent)', color: 'var(--accent-ink)',
+            border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+            cursor: 'pointer', fontFamily: 'inherit',
+            boxShadow: '0 1px 0 rgba(20,18,14,0.06), inset 0 1px 0 rgba(255,255,255,0.12)',
+          }}
         >
-          <Plus className="h-4 w-4" />
+          <Plus size={14}/>
           Add Connection
         </button>
       </div>
 
       {isLoading && (
-        <div className="flex items-center justify-center h-48 text-muted-foreground">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 192, color: 'var(--text-3)', fontSize: 13 }}>
           Loading connections…
         </div>
       )}
 
       {error && (
-        <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-sm text-red-400">
-          {error.message}
+        <div style={{
+          background: 'var(--danger-soft)',
+          border: '1px solid var(--danger)',
+          borderRadius: 'var(--radius)',
+          padding: 16, fontSize: 13, color: 'var(--danger)',
+        }}>
+          {(error as Error).message}
         </div>
       )}
 
       {!isLoading && connections.length === 0 && (
-        <div className="flex flex-col items-center justify-center h-64 text-center">
-          <Database className="h-12 w-12 text-muted-foreground/30 mb-4" />
-          <h3 className="text-lg font-medium text-foreground mb-1">No connections yet</h3>
-          <p className="text-sm text-muted-foreground mb-4">
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          height: 256, textAlign: 'center',
+        }}>
+          <Database size={48} style={{ color: 'var(--text-4)', marginBottom: 16 }}/>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--text-1)' }}>No connections yet</h3>
+          <p style={{ margin: '4px 0 16px', fontSize: 13, color: 'var(--text-3)' }}>
             Add your first MongoDB connection to get started.
           </p>
           <button
             onClick={() => setAddOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-md hover:bg-primary/90"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '8px 14px', fontSize: 13, fontWeight: 500,
+              background: 'var(--accent)', color: 'var(--accent-ink)',
+              border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
           >
-            <Plus className="h-4 w-4" />
+            <Plus size={14}/>
             Add Connection
           </button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
         {connections.map((conn) => (
-          <ConnectionCard key={conn.id} connection={conn} onEdit={setEditConn} />
+          <ConnectionCard key={conn.id} connection={conn} onEdit={setEditConn}/>
         ))}
       </div>
 
-      <AddConnectionModal open={addOpen} onClose={() => setAddOpen(false)} />
+      <AddConnectionModal open={addOpen} onClose={() => setAddOpen(false)}/>
       {editConn && (
-        <AddConnectionModal
-          open
-          onClose={() => setEditConn(null)}
-          existing={editConn}
-        />
+        <AddConnectionModal open onClose={() => setEditConn(null)} existing={editConn}/>
       )}
     </div>
   )

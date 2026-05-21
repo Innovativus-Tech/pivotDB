@@ -12,6 +12,9 @@ import { useConnectionsStore } from '../stores/connections.store'
 import { useCurrentOps } from '../hooks/useCurrentOps'
 import { formatBytes } from '../lib/utils'
 import { GrafanaPanel } from '../components/monitor/GrafanaPanel'
+import {
+  Badge, Card, SectionLabel, StatusDot,
+} from '../components/console/primitives'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,18 +28,8 @@ function fmtUptime(seconds: number): string {
   return `${m}m`
 }
 
-function stateBadgeColor(stateName: string): string {
-  switch (stateName) {
-    case 'PRIMARY':   return 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30'
-    case 'SECONDARY': return 'bg-blue-500/15 text-blue-500 border-blue-500/30'
-    case 'ARBITER':   return 'bg-secondary text-muted-foreground border-border'
-    case 'DOWN':
-    case 'UNKNOWN':
-    case 'RECOVERING':
-      return 'bg-destructive/15 text-destructive border-destructive/30'
-    default: return 'bg-secondary text-muted-foreground border-border'
-  }
-}
+// stateBadgeColor removed — cluster header and replica topology now use
+// console Badge primitives instead of inline class strings.
 
 function durationColor(ms: number): string {
   if (ms < 1000) return 'text-emerald-500'
@@ -86,28 +79,40 @@ function MonitorBody({
   )
 
   return (
-    <div className="p-6 space-y-5">
-      {/* Header row: title + Grafana button */}
-      <div className="flex items-center justify-between">
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
-          <h1 className="text-2xl font-bold">Monitor</h1>
-          <p className="text-sm text-muted-foreground mt-1">{conn.name} · {conn.topology}</p>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-1)' }}>
+            Monitor
+          </h1>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-3)' }}>
+            {conn.name} · {conn.topology}
+          </p>
         </div>
         <a
           href={`${grafanaUrl}/d/mongodb-adv-vis?var-connection_name=${encodeURIComponent(conn.name)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 text-sm px-3 py-2 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
+          target="_blank" rel="noopener noreferrer"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', fontSize: 13,
+            background: 'var(--surface)', color: 'var(--text-2)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            textDecoration: 'none', fontFamily: 'inherit',
+          }}
         >
-          <ExternalLink className="h-3.5 w-3.5" />
+          <ExternalLink size={13}/>
           Open in Grafana
         </a>
       </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       {isError && (
-        <div className="bg-destructive/10 border border-destructive/40 rounded p-3 text-sm text-destructive">
-          Failed to load monitor snapshot: {(error as Error)?.message ?? 'unknown error'}
-        </div>
+        <Card style={{ borderColor: 'var(--danger)', background: 'var(--danger-soft)' }}>
+          <span style={{ color: 'var(--danger)', fontSize: 13 }}>
+            Failed to load monitor snapshot: {(error as Error)?.message ?? 'unknown error'}
+          </span>
+        </Card>
       )}
 
       <ActiveAlertsBanner snapshot={snapshot} />
@@ -152,6 +157,7 @@ function MonitorBody({
 
       {/* Section 3 — Alert Rules */}
       <AlertRulesPanel connectionId={connectionId} />
+      </div>
     </div>
   )
 }
@@ -160,26 +166,35 @@ function MonitorBody({
 
 function ClusterHeaderBar({ snapshot }: { snapshot: MonitorSnapshot | undefined }) {
   if (!snapshot) {
-    return (
-      <div className="bg-card border border-border rounded-lg px-4 py-3 h-16 animate-pulse" />
-    )
+    return <Card padded={false} style={{ padding: '14px 18px', height: 56, opacity: 0.5 }}><span/></Card>
   }
   const state = snapshot.replicaSet?.myStateName ?? 'STANDALONE'
+  const tone: 'success' | 'accent' | 'warn' =
+    state === 'PRIMARY' ? 'success'
+    : state === 'SECONDARY' ? 'accent' : 'warn'
   return (
-    <div className="bg-card border border-border rounded-lg px-4 py-3 flex items-center gap-4 flex-wrap">
-      <span className={`text-xs font-semibold px-2 py-1 rounded-full border ${stateBadgeColor(state)}`}>
-        ● {state}
+    <Card padded={false} style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+      <Badge tone={tone} style={{ padding: '4px 9px' }}>
+        <StatusDot tone={tone === 'success' ? 'success' : 'warn'}/> {state}
+      </Badge>
+      <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>
+        v{snapshot.version || '?'}
       </span>
-      <span className="text-sm font-mono">v{snapshot.version || '?'}</span>
-      <span className="text-sm text-muted-foreground">{snapshot.storageEngine}</span>
-      <span className="text-sm text-muted-foreground">Uptime: {fmtUptime(snapshot.uptime)}</span>
+      <span style={{ fontSize: 13, color: 'var(--text-3)' }}>{snapshot.storageEngine}</span>
+      <span style={{ fontSize: 13, color: 'var(--text-3)' }}>Uptime: {fmtUptime(snapshot.uptime)}</span>
       {snapshot.activeAlerts > 0 && (
-        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-destructive/15 text-destructive border border-destructive/30">
+        <Badge tone="danger">
           {snapshot.activeAlerts} alert{snapshot.activeAlerts === 1 ? '' : 's'}
-        </span>
+        </Badge>
       )}
-      <span className="ml-auto text-xs text-muted-foreground font-mono truncate max-w-md">{snapshot.host}</span>
-    </div>
+      <span style={{
+        marginLeft: 'auto',
+        fontSize: 11.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 420,
+      }}>
+        {snapshot.host}
+      </span>
+    </Card>
   )
 }
 
@@ -188,41 +203,68 @@ function ClusterHeaderBar({ snapshot }: { snapshot: MonitorSnapshot | undefined 
 function ReplicaTopology({ snapshot }: { snapshot: MonitorSnapshot | undefined }) {
   if (!snapshot?.replicaSet) return null
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <p className="text-xs uppercase tracking-wider text-muted-foreground mb-3">
-        Replica set: <span className="text-foreground font-semibold">{snapshot.replicaSet.name}</span>
-      </p>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div>
+          <SectionLabel>Replica set</SectionLabel>
+          <div style={{ marginTop: 4, fontSize: 15, fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+            {snapshot.replicaSet.name}
+          </div>
+        </div>
+        <Badge tone="success">
+          Healthy · {snapshot.replicaSet.members.filter(m => m.health === 1).length}/{snapshot.replicaSet.members.length}
+        </Badge>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
         {snapshot.replicaSet.members.map((m) => {
           const isDown = m.health !== 1
-          const borderCls = isDown
-            ? 'border-destructive/50'
-            : m.stateName === 'PRIMARY' ? 'border-emerald-500/50'
-            : m.stateName === 'SECONDARY' ? 'border-blue-500/50'
-            : 'border-border'
+          const accentVar =
+            isDown ? 'var(--danger)'
+            : m.stateName === 'PRIMARY' ? 'var(--success)'
+            : m.stateName === 'SECONDARY' ? 'var(--accent)'
+            : 'var(--text-3)'
+          const tone: 'success' | 'accent' | 'danger' | 'neutral' =
+            isDown ? 'danger'
+            : m.stateName === 'PRIMARY' ? 'success'
+            : m.stateName === 'SECONDARY' ? 'accent' : 'neutral'
+          const lagColor = m.lagSeconds == null ? 'var(--text-3)'
+            : m.lagSeconds > 30 ? 'var(--danger)'
+            : m.lagSeconds > 10 ? 'var(--warn)' : 'var(--text-3)'
           return (
-            <div key={m.name} className={`border-2 rounded-lg p-3 ${borderCls} bg-secondary/10`}>
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${stateBadgeColor(m.stateName)}`}>
-                  {isDown && <AlertTriangle className="inline h-3 w-3 mr-1" />}
+            <div key={m.name} style={{
+              padding: '12px 14px',
+              background: 'var(--rail)',
+              border: '1px solid var(--border-soft)',
+              borderLeft: `3px solid ${accentVar}`,
+              borderRadius: 'var(--radius)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <Badge tone={tone}>
+                  {isDown && <AlertTriangle size={10}/>}
                   {m.stateName}
-                </span>
-                {m.self && <span className="text-[10px] text-muted-foreground">(YOU)</span>}
+                </Badge>
+                {m.self && (
+                  <span style={{
+                    fontSize: 10.5, color: 'var(--text-3)',
+                    textTransform: 'uppercase', letterSpacing: '0.06em',
+                  }}>this node</span>
+                )}
               </div>
-              <p className="text-xs font-mono truncate" title={m.name}>{m.name}</p>
-              <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                <span>Health: {m.health === 1 ? '✓' : '✗'}</span>
+              <div title={m.name} style={{
+                fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-1)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{m.name}</div>
+              <div style={{ marginTop: 8, display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-3)' }}>
+                <span>health: {m.health === 1 ? '✓' : '✗'}</span>
                 {m.lagSeconds !== null && m.stateName !== 'PRIMARY' && (
-                  <span className={m.lagSeconds > 30 ? 'text-destructive' : m.lagSeconds > 10 ? 'text-amber-500' : ''}>
-                    Lag: {m.lagSeconds.toFixed(1)}s
-                  </span>
+                  <span style={{ color: lagColor }}>lag: {m.lagSeconds.toFixed(1)}s</span>
                 )}
               </div>
             </div>
           )
         })}
       </div>
-    </div>
+    </Card>
   )
 }
 
