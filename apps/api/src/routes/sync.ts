@@ -89,9 +89,26 @@ export async function syncRoutes(app: FastifyInstance) {
     if (!requireAdmin(req, reply)) return;
     const { jobId } = req.params as { jobId: string };
     const scope = profileScope(req);
+    const user = req.user as JWTUser;
     const job = await prisma.syncJob.findFirst({ where: { id: jobId, ...scope } });
     if (!job) return reply.code(404).send({ error: 'Not found' });
     await syncQueue.add('sync', { jobId });
+
+    // Audit destructive `replace` runs — they wipe destination data
+    if (job.writeMode === 'replace') {
+      await prisma.auditEvent.create({
+        data: {
+          actor: user.email,
+          action: 'sync_replace',
+          target: `sync_job:${jobId}`,
+          metadata: {
+            sourceConnId: job.sourceConnId,
+            destConnId: job.destConnId,
+          },
+        },
+      });
+    }
+
     return { queued: true };
   });
 

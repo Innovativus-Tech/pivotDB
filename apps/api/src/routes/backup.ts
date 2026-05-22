@@ -94,6 +94,7 @@ export async function backupRoutes(app: FastifyInstance) {
     if (!requireAdmin(req, reply)) return;
     const { id } = req.params as { id: string };
     const scope = profileScope(req);
+    const user = req.user as JWTUser;
 
     const existing = await prisma.backupJob.findFirst({ where: { id, ...scope } });
     if (!existing) return reply.code(404).send({ error: 'Not found' });
@@ -108,6 +109,16 @@ export async function backupRoutes(app: FastifyInstance) {
     await unscheduleBackupJob(id);
     // Cascade deletes BackupRun rows automatically
     await prisma.backupJob.delete({ where: { id } });
+
+    await prisma.auditEvent.create({
+      data: {
+        actor: user.email,
+        action: 'delete_backup',
+        target: `backup_job:${id}`,
+        metadata: { name: existing.name, connectionId: existing.connectionId },
+      },
+    });
+
     return reply.code(204).send();
   });
 
@@ -238,6 +249,18 @@ export async function backupRoutes(app: FastifyInstance) {
       { restoreRunId: record.id },
       { jobId: `restore-${record.id}` },
     );
+
+    await prisma.auditEvent.create({
+      data: {
+        actor: user.email,
+        action: 'restore_backup',
+        target: `backup_run:${runId}`,
+        metadata: {
+          restoreRunId: record.id,
+          targetConnectionId: body.targetConnectionId,
+        },
+      },
+    });
 
     return reply.code(202).send({ restoreRunId: record.id, status: 'queued' });
   });

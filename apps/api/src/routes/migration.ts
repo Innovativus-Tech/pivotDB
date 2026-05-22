@@ -55,6 +55,20 @@ export async function migrationRoutes(app: FastifyInstance) {
     });
 
     await migrationQueue.add('migration', { migrationJobId: job.id });
+
+    await prisma.auditEvent.create({
+      data: {
+        actor: user.email,
+        action: 'create_migration',
+        target: `migration_job:${job.id}`,
+        metadata: {
+          name: body.name,
+          sourceConnId: body.sourceConnId,
+          destConnId: body.destConnId,
+        },
+      },
+    });
+
     return reply.code(201).send(job);
   });
 
