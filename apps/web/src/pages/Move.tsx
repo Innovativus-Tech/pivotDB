@@ -248,14 +248,14 @@ function SyncTab() {
   })
 
   // Per-job run status: jobId → { status, counts, error }
-  const [runStates, setRunStates] = useState<Record<string, { status: 'queued' | 'running' | 'success' | 'partial' | 'failed'; transferred?: number; error?: string }>>({})
+  const [runStates, setRunStates] = useState<Record<string, { status: 'queued' | 'running' | 'success' | 'partial' | 'failed'; transferred?: number; skipped?: number; error?: string }>>({})
 
   const pollRun = async (jobId: string) => {
     const maxAttempts = 60 // poll up to 5 min (5s interval)
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(r => setTimeout(r, 5000))
       try {
-        const runs = await api.get<Array<{ status: string; counts?: { transferred?: number }; errorReport?: unknown }>>(`/api/sync/${jobId}/runs`)
+        const runs = await api.get<Array<{ status: string; counts?: { transferred?: number; skipped?: number }; errorReport?: unknown }>>(`/api/sync/${jobId}/runs`)
         const latest = runs[0]
         if (!latest) continue
         if (latest.status === 'running') continue
@@ -264,6 +264,7 @@ function SyncTab() {
           [jobId]: {
             status: latest.status as 'success' | 'partial' | 'failed',
             transferred: latest.counts?.transferred,
+            skipped: latest.counts?.skipped,
             error: latest.status === 'failed' ? JSON.stringify(latest.errorReport) : undefined,
           }
         }))
@@ -456,7 +457,10 @@ function SyncTab() {
                       {runState.status === 'partial' && '⚠ Completed with some errors'}
                       {runState.status === 'failed' && '✕ Failed'}
                       {runState.transferred !== undefined && (
-                        <span className="text-muted-foreground ml-1">· {runState.transferred} docs transferred</span>
+                        <span className="text-muted-foreground ml-1">
+                          · {runState.transferred} written
+                          {runState.skipped ? ` · ${runState.skipped} skipped` : ''}
+                        </span>
                       )}
                       {runState.error && <span className="ml-1 opacity-70 truncate max-w-xs">{runState.error}</span>}
                     </div>

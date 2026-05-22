@@ -71,18 +71,24 @@ export function startSyncWorker() {
             for await (const doc of cursor) {
               batch.push(doc as Record<string, unknown>);
               if (batch.length >= BATCH_SIZE) {
-                if (!dryRun) {
-                  await flushBatch(dstColl, batch, syncJob.writeMode);
+                if (dryRun) {
+                  counts.transferred += batch.length;
+                } else {
+                  const result = await flushBatch(dstColl, batch, syncJob.writeMode);
+                  counts.transferred += result.written;
+                  counts.skipped += result.skipped;
                 }
-                counts.transferred += batch.length;
                 batch = [];
               }
             }
             if (batch.length > 0) {
-              if (!dryRun) {
-                await flushBatch(dstColl, batch, syncJob.writeMode);
+              if (dryRun) {
+                counts.transferred += batch.length;
+              } else {
+                const result = await flushBatch(dstColl, batch, syncJob.writeMode);
+                counts.transferred += result.written;
+                counts.skipped += result.skipped;
               }
-              counts.transferred += batch.length;
             }
 
             if (!dryRun) {
@@ -122,21 +128,35 @@ async function flushBatch(
   coll: ReturnType<Db['collection']>,
   batch: Array<Record<string, unknown>>,
   writeMode: string,
-) {
+): Promise<{ written: number; skipped: number }> {
   if (writeMode === 'upsert') {
-    // replaceOne with upsert:true — updates existing docs or inserts new ones
+    // replaceOne with upsert:true — updates existing docs or inserts new ones.
+    // Both update and insert count as "written" (destination reflects source).
     const ops = batch.map((doc) => ({
       replaceOne: { filter: { _id: doc['_id'] }, replacement: doc, upsert: true },
     }));
-    await coll.bulkWrite(ops as Parameters<typeof coll.bulkWrite>[0]);
-  } else {
-    // insertOnly / replace-after-drop: ordered:false so duplicates don't abort the batch
-    // Only swallow duplicate-key errors (11000); re-throw genuine failures
-    try {
-      await coll.insertMany(batch as Parameters<typeof coll.insertMany>[0], { ordered: false });
-    } catch (err: unknown) {
-      const code = (err as { code?: number })?.code;
-      if (code !== 11000) throw err; // re-throw non-duplicate errors
-    }
+    const res = await coll.bulkWrite(ops as Parameters<typeof coll.bulkWrite>[0]);
+    // upsertedCount = new inserts, matchedCount = existing docs replaced
+    const written = (res.upsertedCount ?? 0) + (res.matchedCount ?? 0);
+    return { written, skipped: 0 };
+  }
+
+  // insertOnly / replace-after-drop: ordered:false → duplicates don't abort the batch.
+  // BulkWriteResult.insertedCount tells us exactly how many made it in;
+  // anything else with code 11000 is a duplicate-key skip.
+  try {
+    const res = await coll.insertMany(
+      batch as Parameters<typeof coll.insertMany>[0],
+      { ordered: false },
+    );
+    return { written: res.insertedCount ?? batch.length, skipped: 0 };
+  } catch (err: unknown) {
+    const e = err as { code?: number; result?: { insertedCount?: number }; writeErrors?: Array<{ code: number }> };
+    const isDup = e.code === 11000 || (e.writeErrors ?? []).every((w) => w.code === 11000);
+    if (!isDup) throw err; // re-throw non-duplicate errors
+
+    const inserted = e.result?.insertedCount ?? Math.max(0, batch.length - (e.writeErrors?.length ?? 0));
+    const skipped  = (e.writeErrors?.length ?? 0) || (batch.length - inserted);
+    return { written: inserted, skipped };
   }
 }
