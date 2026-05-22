@@ -4,6 +4,11 @@ import { syncQueue, backupQueue } from '../lib/queue.js';
 import { evaluateAlerts } from '../lib/alertEvaluator.js';
 import { getSnapshot } from '../services/monitor.service.js';
 
+// Timezone used when interpreting all cron expressions.
+// Set SCHEDULER_TZ in your .env to change it (e.g. "Asia/Kolkata", "America/New_York").
+// Defaults to UTC so schedules are server-timezone-independent.
+const SCHEDULER_TZ = process.env.SCHEDULER_TZ ?? 'UTC';
+
 // ── Backup scheduling via BullMQ repeatable jobs ──────────────────────────────
 // BullMQ stores repeatable jobs in Redis (persistent, survives restarts).
 // This is more reliable than in-memory node-cron tasks which can ghost-fire
@@ -21,13 +26,13 @@ export async function scheduleBackupJob(job: { id: string; schedule: string }) {
     'run',
     { backupJobId: job.id },
     {
-      repeat: { pattern: job.schedule },
+      repeat: { pattern: job.schedule, tz: SCHEDULER_TZ },
       // Embed the backup-job ID so we can find + remove it later
       jobId: `backup-repeat-${job.id}`,
     },
   );
 
-  console.log(`[scheduler] scheduled backup job ${job.id} → ${job.schedule}`);
+  console.log(`[scheduler] scheduled backup job ${job.id} → ${job.schedule} (tz: ${SCHEDULER_TZ})`);
 }
 
 export async function unscheduleBackupJob(jobId: string) {
@@ -81,7 +86,7 @@ export async function startScheduler() {
       if (job.schedule && cron.validate(job.schedule)) {
         await syncQueue.add('sync', { jobId: job.id }, {
           jobId: `sync-repeat-${job.id}`,
-          repeat: { pattern: job.schedule },
+          repeat: { pattern: job.schedule, tz: SCHEDULER_TZ },
         }).catch(() => {});
       }
     }
