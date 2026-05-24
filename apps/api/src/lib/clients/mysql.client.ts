@@ -1,5 +1,14 @@
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
-import type { DbClient, DiscoveredColumn, DiscoveredNamespace, ProbeResult } from './types.js';
+import type { DbClient, DiscoveredColumn, DiscoveredNamespace, ProbeResult, RowPage } from './types.js';
+
+const MAX_PAGE_SIZE = 1000;
+
+function validateIdent(s: string, kind: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(s)) {
+    throw new Error(`Invalid ${kind} identifier: "${s}"`);
+  }
+  return s;
+}
 
 /**
  * MySQL implementation of DbClient.
@@ -113,6 +122,52 @@ export class MySqlDbClient implements DbClient {
       }
     }
     return out;
+  }
+
+  async fetchRows(
+    ns: { database: string; name: string },
+    opts: { limit: number; offset: number },
+  ): Promise<RowPage> {
+    const conn = await this.connect();
+    const db    = validateIdent(ns.database, 'database');
+    const table = validateIdent(ns.name, 'table');
+    const limit  = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.floor(opts.limit)));
+    const offset = Math.max(0, Math.floor(opts.offset));
+
+    // Use PK ordering if present, else natural insert order (MySQL's default).
+    const [pkRows] = await conn.query<RowDataPacket[]>(
+      `SELECT column_name FROM information_schema.key_column_usage
+       WHERE table_schema = ? AND table_name = ? AND constraint_name = 'PRIMARY'
+       ORDER BY ordinal_position`,
+      [db, table],
+    );
+    const orderBy = pkRows.length > 0
+      ? pkRows.map((r) => '`' + String(r.column_name ?? r.COLUMN_NAME) + '`').join(', ')
+      : '1';
+
+    // Note: mysql2 doesn't allow placeholders for LIMIT/OFFSET in some configs,
+    // so we inline the (already-sanitised) integers.
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT * FROM \`${db}\`.\`${table}\` ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`,
+    );
+
+    const [countRows] = await conn.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM \`${db}\`.\`${table}\``,
+    );
+
+    // mysql2 doesn't expose typed field metadata in the same shape as pg; use
+    // the keys of the first row as the column list. (Discovery provides
+    // proper column metadata when the UI wants it.)
+    const columns: DiscoveredColumn[] = rows.length > 0
+      ? Object.keys(rows[0]).map((name) => ({ name, type: 'string', nullable: true }))
+      : [];
+
+    return {
+      rows: rows as Array<Record<string, unknown>>,
+      total: Number(countRows[0]?.c ?? 0),
+      totalExact: true,
+      columns,
+    };
   }
 
   async close(): Promise<void> {

@@ -8,6 +8,7 @@ import { api, type Connection, type SavedQuery } from '../lib/api'
 import { useConnectionsStore } from '../stores/connections.store'
 import { SchemaGraph } from '../components/explore/SchemaGraph'
 import { AggregationEditor } from '../components/explore/AggregationEditor'
+import { SqlExplorer } from '../components/explore/SqlExplorer'
 import { formatBytes } from '../lib/utils'
 
 interface DbInfo { name: string }
@@ -116,51 +117,11 @@ export function ExplorePage() {
     )
   }
 
-  // Explore is Mongo-only today (collections/documents view). Phase 0 added
-  // SQL connection support but the Explore page hasn't been rebuilt for SQL
-  // yet — the Mongo /explore/* API endpoints would 4xx for a PG/MySQL conn.
-  // Show a clear message + suggest the right destination instead.
+  // SQL connections get their own dedicated explorer (tables + paginated rows).
+  // The Mongo body below stays untouched so its existing query/schema/aggregate
+  // tabs continue to work — we just dispatch on dbType here.
   if (conn.dbType !== 'mongodb') {
-    const engineLabel = conn.dbType === 'postgres' ? 'PostgreSQL' : conn.dbType === 'mysql' ? 'MySQL' : conn.dbType
-    return (
-      <div style={{
-        padding: 32, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', height: '100%',
-        color: 'var(--text-2)', textAlign: 'center', gap: 12,
-      }}>
-        <DatabaseIcon size={36} style={{ color: 'var(--text-4)' }}/>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--text-1)' }}>
-            Explore doesn't support {engineLabel} yet
-          </h2>
-          <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-3)', maxWidth: 460 }}>
-            The Explore page is built around MongoDB collections.
-            For {engineLabel}, use a SQL client (psql, DBeaver, TablePlus) to inspect data,
-            or use <b>Migrate</b> to copy this database into a MongoDB target — then Explore it here.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <a href="/connections" style={{
-            display: 'inline-flex', alignItems: 'center',
-            padding: '6px 12px', fontSize: 13, fontWeight: 500,
-            background: 'transparent', color: 'var(--text-2)',
-            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-            textDecoration: 'none',
-          }}>
-            Switch connection
-          </a>
-          <a href="/migrate" style={{
-            display: 'inline-flex', alignItems: 'center',
-            padding: '6px 12px', fontSize: 13, fontWeight: 500,
-            background: 'var(--accent)', color: 'var(--accent-ink)',
-            border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
-            textDecoration: 'none',
-          }}>
-            Open Migrate
-          </a>
-        </div>
-      </div>
-    )
+    return <SqlExplorer conn={conn} />
   }
 
   const docs = queryResult?.docs ?? []

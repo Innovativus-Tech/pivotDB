@@ -1,5 +1,5 @@
 import { MongoClient } from 'mongodb';
-import type { DbClient, DiscoveredColumn, DiscoveredNamespace, ProbeResult } from './types.js';
+import type { DbClient, DiscoveredColumn, DiscoveredNamespace, ProbeResult, RowPage } from './types.js';
 
 const SYSTEM_DBS = new Set(['admin', 'local', 'config']);
 const DEFAULT_SAMPLE_SIZE = 1000;
@@ -74,6 +74,21 @@ export class MongoDbClient implements DbClient {
       }
     }
     return out;
+  }
+
+  async fetchRows(
+    ns: { database: string; name: string },
+    opts: { limit: number; offset: number },
+  ): Promise<RowPage> {
+    const client = await this.connect();
+    const coll = client.db(ns.database).collection(ns.name);
+    const limit  = Math.max(1, Math.min(1000, Math.floor(opts.limit)));
+    const offset = Math.max(0, Math.floor(opts.offset));
+    const [rows, total] = await Promise.all([
+      coll.find({}).skip(offset).limit(limit).toArray(),
+      coll.estimatedDocumentCount().catch(() => 0),
+    ]);
+    return { rows: rows as Array<Record<string, unknown>>, total, totalExact: false };
   }
 
   async close(): Promise<void> {

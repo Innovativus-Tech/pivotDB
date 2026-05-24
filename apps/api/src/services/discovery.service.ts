@@ -2,7 +2,7 @@ import { decrypt } from '../crypto/encrypt.js';
 import { prisma } from '../lib/prisma.js';
 import { makeClient } from '../lib/clients/index.js';
 import { isValidDbType } from '../lib/uri-validators.js';
-import type { DbType, DiscoveredNamespace } from '../lib/clients/index.js';
+import type { DbType, DiscoveredNamespace, RowPage } from '../lib/clients/index.js';
 
 /**
  * Discovery service — thin wrapper around DbClient implementations.
@@ -37,4 +37,16 @@ export async function discoverConnectionSchema(
   options: { database?: string; sampleSize?: number } = {},
 ): Promise<DiscoveredNamespace[]> {
   return withClient(connectionId, (c) => c.discoverSchema(options.database, { sampleSize: options.sampleSize }));
+}
+
+/**
+ * Fetch a page of rows from a SQL table (Phase 2A — SqlExplorer).
+ * Mongo connections should use the existing /explore/* routes instead.
+ */
+export async function fetchSqlRows(
+  connectionId: string,
+  ns: { database: string; name: string },
+  opts: { limit: number; offset: number },
+): Promise<RowPage> {
+  return withClient(connectionId, (c) => c.fetchRows(ns, opts));
 }

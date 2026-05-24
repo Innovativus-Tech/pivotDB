@@ -130,6 +130,30 @@ export async function connectionRoutes(app: FastifyInstance) {
     }
   });
 
+  // ── SQL rows fetch (Phase 2A) ──────────────────────────────────────────────
+  // Used by the SqlExplorer on the Explore page. Refuses Mongo connections
+  // because Mongo has its own `/explore/*` endpoints with richer filtering.
+  app.get('/:id/sql/tables/:database/:table/rows', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id, database, table } = req.params as { id: string; database: string; table: string };
+    const { limit = '50', offset = '0' } = req.query as { limit?: string; offset?: string };
+    const scope = profileScope(req);
+
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+    if (conn.dbType === 'mongodb') {
+      return reply.code(400).send({ error: 'Use /explore endpoints for MongoDB connections' });
+    }
+
+    try {
+      const { fetchSqlRows } = await import('../services/discovery.service.js');
+      return await fetchSqlRows(id, { database, name: table }, {
+        limit: Number(limit), offset: Number(offset),
+      });
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
+  });
+
   // ── Auth routes ────────────────────────────────────────────────────────────
 
   app.post('/auth/login', async (req, reply) => {

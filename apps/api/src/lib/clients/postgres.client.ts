@@ -1,5 +1,16 @@
 import { Client } from 'pg';
-import type { DbClient, DiscoveredColumn, DiscoveredNamespace, ProbeResult } from './types.js';
+import type { DbClient, DiscoveredColumn, DiscoveredNamespace, ProbeResult, RowPage } from './types.js';
+
+/** Hard cap on rows per page — protects the server from a runaway request. */
+const MAX_PAGE_SIZE = 1000;
+
+/** Validate that an identifier is safe to embed in raw SQL (we always quote it). */
+function validateIdent(s: string, kind: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(s)) {
+    throw new Error(`Invalid ${kind} identifier: "${s}"`);
+  }
+  return s;
+}
 
 /**
  * Postgres implementation of DbClient.
@@ -55,14 +66,26 @@ export class PostgresDbClient implements DbClient {
     };
   }
 
+  /**
+   * For Postgres, `listDatabases()` returns SCHEMAS in the currently-connected
+   * database — not other PG databases on the server.
+   *
+   * Why: a connection is bound to one PG database via the URI; to inspect a
+   * different database you'd need a new URI. What the user actually wants to
+   * navigate is the schema tree inside the current database (where the tables
+   * live). This also matches the contract `discoverSchema(name)` expects.
+   *
+   * If we ever surface a cross-database picker we'll add a separate
+   * `listServerDatabases()` method.
+   */
   async listDatabases(): Promise<string[]> {
     const client = await this.connect();
-    const res = await client.query<{ datname: string }>(
-      `SELECT datname FROM pg_database
-       WHERE datistemplate = false AND datname NOT IN ('postgres','template0','template1')
-       ORDER BY datname`,
+    const res = await client.query<{ schema_name: string }>(
+      `SELECT schema_name FROM information_schema.schemata
+       WHERE schema_name NOT IN ('pg_catalog','information_schema','pg_toast')
+       ORDER BY schema_name`,
     );
-    return res.rows.map((r) => r.datname);
+    return res.rows.map((r) => r.schema_name);
   }
 
   /**
@@ -150,6 +173,62 @@ export class PostgresDbClient implements DbClient {
       }
     }
     return out;
+  }
+
+  async fetchRows(
+    ns: { database: string; name: string },
+    opts: { limit: number; offset: number },
+  ): Promise<RowPage> {
+    const client = await this.connect();
+    const schema = validateIdent(ns.database, 'schema');
+    const table  = validateIdent(ns.name, 'table');
+    const limit  = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.floor(opts.limit)));
+    const offset = Math.max(0, Math.floor(opts.offset));
+
+    // Stable order — by primary key if present, else by ctid (physical row id).
+    // This keeps pagination consistent during concurrent inserts.
+    const pkCols = await client.query<{ column_name: string }>(
+      `SELECT kcu.column_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+       WHERE tc.constraint_type = 'PRIMARY KEY'
+         AND tc.table_schema = $1 AND tc.table_name = $2
+       ORDER BY kcu.ordinal_position`,
+      [schema, table],
+    );
+    const orderBy = pkCols.rows.length > 0
+      ? pkCols.rows.map((r) => `"${r.column_name}"`).join(', ')
+      : 'ctid';
+
+    // We deliberately do an exact COUNT(*) here because Explore is interactive
+    // and users expect "1234 rows" to mean 1234, not "about 1200." For very
+    // large tables this can be slow; we can add a fast-estimate switch later.
+    const [rowsRes, countRes] = await Promise.all([
+      client.query(
+        `SELECT * FROM "${schema}"."${table}" ORDER BY ${orderBy} LIMIT $1 OFFSET $2`,
+        [limit, offset],
+      ),
+      client.query<{ c: string }>(
+        `SELECT COUNT(*)::bigint::text AS c FROM "${schema}"."${table}"`,
+      ),
+    ]);
+
+    // Build column metadata from the field descriptors pg returns — cheaper
+    // than another information_schema lookup and includes the actual types
+    // pg sent over the wire (handles arrays etc. correctly).
+    const columns: DiscoveredColumn[] = rowsRes.fields.map((f) => ({
+      name: f.name,
+      type: 'string', // canonical type isn't needed for Explore; the UI shows the value
+      nullable: true,
+    }));
+
+    return {
+      rows: rowsRes.rows as Array<Record<string, unknown>>,
+      total: Number(countRes.rows[0]?.c ?? 0),
+      totalExact: true,
+      columns,
+    };
   }
 
   async close(): Promise<void> {

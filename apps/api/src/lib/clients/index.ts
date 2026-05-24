@@ -4,7 +4,7 @@ import { PostgresDbClient } from './postgres.client.js';
 import { MySqlDbClient } from './mysql.client.js';
 
 export { MongoDbClient, PostgresDbClient, MySqlDbClient };
-export type { DbClient, DbType, ProbeResult, DiscoveredNamespace, DiscoveredColumn } from './types.js';
+export type { DbClient, DbType, ProbeResult, DiscoveredNamespace, DiscoveredColumn, RowPage } from './types.js';
 
 /**
  * Build a fresh, single-use client for the given dbType + URI.

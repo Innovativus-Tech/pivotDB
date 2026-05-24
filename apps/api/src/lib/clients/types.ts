@@ -66,6 +66,25 @@ export interface DbClient {
   listDatabases(): Promise<string[]>;
   /** Discover all namespaces in the given database (or all dbs if undefined). */
   discoverSchema(database?: string, options?: { sampleSize?: number }): Promise<DiscoveredNamespace[]>;
+  /**
+   * Fetch a page of rows / docs from a single namespace. Used by Explore.
+   * Implementations MUST cap `limit` (server-side safety) and clamp `offset`
+   * to a non-negative integer. Returns the rows + a best-effort total count.
+   */
+  fetchRows(
+    namespace: { database: string; name: string },
+    opts: { limit: number; offset: number },
+  ): Promise<RowPage>;
   /** Release any held resources. Safe to call multiple times. */
   close(): Promise<void>;
+}
+
+export interface RowPage {
+  rows: Array<Record<string, unknown>>;
+  /** Total row/doc count for the namespace. May be approximate for huge tables. */
+  total: number;
+  /** True if the count is exact; false if it's an estimate. */
+  totalExact: boolean;
+  /** Column metadata for SQL — matches what discovery returns. Undefined for Mongo. */
+  columns?: DiscoveredColumn[];
 }
