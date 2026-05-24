@@ -107,8 +107,17 @@ function ExportTab() {
             <select value={connId} onChange={(e) => { setConnId(e.target.value); setDb(''); setColl('') }}
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm">
               <option value="">Select…</option>
-              {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {/* Export uses Mongo-only export endpoints; hide SQL conns to
+                  prevent silent failures. Cross-engine "export" lands later. */}
+              {connections.filter((c) => c.dbType === 'mongodb').map((c) =>
+                <option key={c.id} value={c.id}>{c.name}</option>
+              )}
             </select>
+            {connections.some((c) => c.dbType !== 'mongodb') && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Export currently supports MongoDB only.
+              </p>
+            )}
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Database</label>
@@ -296,7 +305,12 @@ function SyncTab() {
             <select value={srcId} onChange={(e) => setSrcId(e.target.value)}
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm">
               <option value="">Select…</option>
-              {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {/* Sync currently only handles Mongo↔Mongo. Cross-engine sync
+                  lands in a later phase — for now filter to Mongo to prevent
+                  silent failures. */}
+              {connections.filter((c) => c.dbType === 'mongodb').map((c) =>
+                <option key={c.id} value={c.id}>{c.name}</option>
+              )}
             </select>
           </div>
           <div>
@@ -304,7 +318,9 @@ function SyncTab() {
             <select value={dstId} onChange={(e) => setDstId(e.target.value)}
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm">
               <option value="">Select…</option>
-              {connections.filter((c) => c.id !== srcId && !c.readOnly).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {connections.filter((c) => c.id !== srcId && !c.readOnly && c.dbType === 'mongodb').map((c) =>
+                <option key={c.id} value={c.id}>{c.name}</option>
+              )}
             </select>
           </div>
           <div>

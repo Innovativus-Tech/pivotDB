@@ -9,6 +9,7 @@ import {
   type SlowQuery, type DbSize, type CollSize,
 } from '../lib/api'
 import { useConnectionsStore } from '../stores/connections.store'
+import { MongoOnlyGuard } from '../components/shared/MongoOnlyGuard'
 import { useCurrentOps } from '../hooks/useCurrentOps'
 import { formatBytes } from '../lib/utils'
 import { GrafanaPanel } from '../components/monitor/GrafanaPanel'
@@ -56,6 +57,12 @@ export function MonitorPage() {
         <p className="text-muted-foreground">Select a connection from the Connections page to view monitoring.</p>
       </div>
     )
+  }
+
+  // Monitor uses Mongo-only diagnostics (serverStatus, currentOp, replSetGetStatus).
+  // SQL engines need a different metrics stack — out of scope for Phase 1.
+  if (conn.dbType !== 'mongodb') {
+    return <MongoOnlyGuard conn={conn} feature="Monitor" />
   }
 
   return <MonitorBody connectionId={activeConnectionId} conn={conn} grafanaUrl={grafanaUrl} />

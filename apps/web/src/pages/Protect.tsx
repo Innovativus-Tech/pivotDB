@@ -412,8 +412,17 @@ function CreateJobForm({ connections, onCreated }: { connections: Connection[]; 
           <select value={connId} onChange={(e) => setConnId(e.target.value)}
             className="w-full bg-input border border-border rounded px-3 py-2 text-sm">
             <option value="">Select connection…</option>
-            {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {/* Backup uses mongodump/mongorestore (Mongo-only) — SQL conns
+                would fail. Hide them until a SQL backup story exists. */}
+            {connections.filter((c) => c.dbType === 'mongodb').map((c) =>
+              <option key={c.id} value={c.id}>{c.name}</option>
+            )}
           </select>
+          {connections.some((c) => c.dbType !== 'mongodb') && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Backups use mongodump — MongoDB connections only.
+            </p>
+          )}
         </div>
 
         <div className="col-span-2">

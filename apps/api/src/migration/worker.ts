@@ -19,6 +19,27 @@ let worker: Worker | null = null;
 export function startMigrationV2Worker(io: IOServer): Worker {
   if (worker) return worker;
 
+  // ── Socket.io: room subscription for /migration-v2 ─────────────────────
+  //
+  // The worker emits per-run events with `io.of('/migration-v2').to(runId).emit(...)`.
+  // Without this handler, clients would never join the room and miss every event.
+  //
+  // Protocol:
+  //   client → socket.emit('subscribe', runId)
+  //   server   joins the socket into a room named `runId`
+  //   server → emits 'subscribed' { runId } as ack
+  //   server → from here on, all worker events on that runId flow to the socket
+  io.of('/migration-v2').on('connection', (socket) => {
+    socket.on('subscribe', (runId: unknown) => {
+      if (typeof runId !== 'string' || !runId) return;
+      socket.join(runId);
+      socket.emit('subscribed', { runId });
+    });
+    socket.on('unsubscribe', (runId: unknown) => {
+      if (typeof runId === 'string') socket.leave(runId);
+    });
+  });
+
   worker = new Worker(
     QUEUE_NAME,
     async (job: Job<{ runId: string }>) => {
