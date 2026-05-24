@@ -1,0 +1,58 @@
+# Local test fixtures for cross-engine migration work.
+#
+# These containers are *only* for local dev — they are NOT included in the
+# production docker-compose.yml or the Coolify deployment. Start them with:
+#
+#   cd dev/test-dbs && docker compose up -d
+#
+# Connection strings (from the host machine):
+#   Postgres: postgresql://test:test@localhost:5433/testdb
+#   MySQL:    mysql://test:test@localhost:3307/testdb
+#
+# Ports are intentionally non-default (5433, 3307) to avoid colliding with the
+# app's own metadata Postgres (5432) or any local MySQL you might already run.
+
+services:
+  pg-test:
+    image: postgres:16-alpine
+    container_name: mongovis-pg-test
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    volumes:
+      - pg-test-data:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mysql-test:
+    image: mysql:8.0
+    container_name: mongovis-mysql-test
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: test
+      MYSQL_PASSWORD: test
+      MYSQL_ROOT_PASSWORD: rootpw
+    volumes:
+      - mysql-test-data:/var/lib/mysql
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-utest", "-ptest"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pg-test-data:
+  mysql-test-data:

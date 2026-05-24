@@ -10,6 +10,8 @@ import { createHash } from 'node:crypto';
 
 const CreateBody = z.object({
   name: z.string().min(1),
+  // dbType defaults to mongodb so existing clients (no field sent) still work.
+  dbType: z.enum(['mongodb', 'postgres', 'mysql']).default('mongodb'),
   uri: z.string().min(1),
   tags: z.array(z.string()).default([]),
   readOnly: z.boolean().default(false),
@@ -86,6 +88,45 @@ export async function connectionRoutes(app: FastifyInstance) {
       return await testConnection(id);
     } catch (err) {
       return reply.code(400).send({ error: String(err) });
+    }
+  });
+
+  // ── Schema discovery (Phase 0 of cross-engine migration) ───────────────────
+  // Returns a uniform shape across mongodb / postgres / mysql so the Migrate
+  // wizard can render the same tree component for any source.
+  app.get('/:id/schema', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { database, sampleSize } = req.query as { database?: string; sampleSize?: string };
+    const scope = profileScope(req);
+
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+
+    try {
+      const { discoverConnectionSchema } = await import('../services/discovery.service.js');
+      const namespaces = await discoverConnectionSchema(id, {
+        database,
+        sampleSize: sampleSize ? Number(sampleSize) : undefined,
+      });
+      return { dbType: conn.dbType, namespaces };
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
+  });
+
+  // List databases visible to this connection's credential.
+  // Used by the Migrate wizard's "pick a database" step.
+  app.get('/:id/databases', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+    try {
+      const { listConnectionDatabases } = await import('../services/discovery.service.js');
+      const databases = await listConnectionDatabases(id);
+      return { dbType: conn.dbType, databases };
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
     }
   });
 

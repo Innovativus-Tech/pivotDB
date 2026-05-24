@@ -44,10 +44,19 @@ export async function login(email: string, password: string) {
 }
 
 // Connection types
+export type DbType = 'mongodb' | 'postgres' | 'mysql'
+
 export interface Connection {
   id: string
   name: string
+  /** Engine type. Defaults to 'mongodb' for rows created before cross-engine support. */
+  dbType: DbType
+  /** Mongo-only: standalone | replicaSet | sharded. "standalone" for SQL. */
   topology: string
+  /** Server version cached at last successful test, e.g. "7.0.5" or "16.2". */
+  dbVersion?: string | null
+  /** Per-engine extras (PG schemas, MySQL charset, Mongo replicaSet name). */
+  metadata?: Record<string, unknown> | null
   tags: string[]
   readOnly: boolean
   createdBy: string

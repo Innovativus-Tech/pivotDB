@@ -16,6 +16,13 @@ const topologyTone: Record<string, { bg: string; fg: string; bd: string }> = {
   sharded:    { bg: 'var(--warn-soft)',    fg: 'var(--warn)',    bd: 'var(--warn-soft)' },
 }
 
+/** Per-engine pill tone. Distinct from topology so the user can see both at a glance. */
+const dbTypeTone: Record<string, { label: string; bg: string; fg: string; bd: string }> = {
+  mongodb:  { label: 'Mongo',    bg: '#E6F4EA', fg: '#1F7A3A', bd: '#C8E5D2' },
+  postgres: { label: 'Postgres', bg: '#E7EEF8', fg: '#3151A3', bd: '#C9D6EE' },
+  mysql:    { label: 'MySQL',    bg: '#FBEEDC', fg: '#9A6300', bd: '#F0D9A8' },
+}
+
 export function ConnectionCard({ connection, onEdit }: Props) {
   const qc = useQueryClient()
   const { activeConnectionId, setActiveConnection } = useConnectionsStore()
@@ -51,6 +58,9 @@ export function ConnectionCard({ connection, onEdit }: Props) {
 
   const isActive = activeConnectionId === connection.id
   const topology = topologyTone[connection.topology] ?? topologyTone.standalone
+  const engineTone = dbTypeTone[connection.dbType] ?? dbTypeTone.mongodb
+  // Hide redundant "standalone" topology pill for SQL engines — every SQL conn is standalone.
+  const showTopology = connection.dbType === 'mongodb'
 
   return (
     <>
@@ -78,12 +88,21 @@ export function ConnectionCard({ connection, onEdit }: Props) {
             }}>{connection.name}</h3>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
               <span style={{
-                fontSize: 11, padding: '2px 7px', borderRadius: 999,
-                background: topology.bg, color: topology.fg,
-                border: `1px solid ${topology.bd}`,
+                fontSize: 11, padding: '2px 7px', borderRadius: 999, fontWeight: 600,
+                background: engineTone.bg, color: engineTone.fg,
+                border: `1px solid ${engineTone.bd}`,
               }}>
-                {connection.topology}
+                {engineTone.label}
               </span>
+              {showTopology && (
+                <span style={{
+                  fontSize: 11, padding: '2px 7px', borderRadius: 999,
+                  background: topology.bg, color: topology.fg,
+                  border: `1px solid ${topology.bd}`,
+                }}>
+                  {connection.topology}
+                </span>
+              )}
               {connection.readOnly && (
                 <span style={{
                   fontSize: 11, padding: '2px 7px', borderRadius: 999,
@@ -105,7 +124,7 @@ export function ConnectionCard({ connection, onEdit }: Props) {
 
         {testResult && (
           <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--success)' }}>
-            v{testResult.serverVersion} · {testResult.latencyMs}ms
+            {engineTone.label} v{testResult.serverVersion} · {testResult.latencyMs}ms
           </p>
         )}
         {testError && (

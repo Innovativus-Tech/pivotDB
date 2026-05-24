@@ -41,7 +41,16 @@ model Connection {
   id             String   @id @default(cuid())
   name           String
   encryptedUri   String
+  // dbType: which engine this connection points at. Drives client + discovery.
+  // Allowed values: "mongodb" | "postgres" | "mysql". Supabase = "postgres".
+  dbType         String   @default("mongodb")
+  // topology: Mongo-only ("standalone" | "replicaSet" | "sharded").
+  // For SQL connections this stays "standalone".
   topology       String
+  // metadata: per-type extras (SSL CA, PG schema name, MySQL charset, etc.)
+  metadata       Json?
+  // dbVersion: server version cached at last successful test.
+  dbVersion      String?
   tags           String[]
   readOnly       Boolean  @default(false)
   createdBy      String

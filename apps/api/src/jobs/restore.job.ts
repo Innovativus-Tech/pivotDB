@@ -97,7 +97,6 @@ export function startRestoreWorker() {
 
         // ── STEP 4: Decrypt target MongoDB URI ──
         const targetUri = decrypt(restoreRun.targetConnection.encryptedUri);
-        const tlsInsecure = targetUri.startsWith('mongodb+srv://');
 
         // ── STEP 5: mongorestore ──
         // --drop: drops each collection before restoring (clean restore)
@@ -105,12 +104,14 @@ export function startRestoreWorker() {
         // NOTE: --preserveUUID is intentionally omitted — it requires the
         // `applyOps` admin command which MongoDB Atlas does not grant to
         // regular users. New UUIDs are fine for restore semantics.
+        // NOTE: do NOT pass --tlsInsecure for mongodb+srv:// — Atlas has valid
+        // certs and --tlsInsecure breaks SNI on Atlas's LB, producing
+        // "remote error: tls: internal error" handshake failures.
         const restoreArgs = [
           '--uri', targetUri,
           '--dir', dumpDir,
           '--gzip',
           '--drop',
-          ...(tlsInsecure ? ['--tlsInsecure'] : []),
         ];
 
         const { stdout, stderr } = await execFileAsync('mongorestore', restoreArgs, {

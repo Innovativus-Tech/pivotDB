@@ -53,14 +53,15 @@ export function startBackupWorker() {
 
         // Step 2: Decrypt MongoDB URI
         const uri = decrypt(backupJob.connection.encryptedUri);
-        const tlsInsecure = uri.startsWith('mongodb+srv://');
 
         // Step 3: Run mongodump
+        // NOTE: do NOT pass --tlsInsecure for mongodb+srv:// — Atlas has valid
+        // certs and `--tlsInsecure` breaks SNI on Atlas's load balancer,
+        // producing "remote error: tls: internal error" handshake failures.
         const baseDumpArgs = [
           '--uri', uri,
           '--out', dumpDir,
           '--gzip',
-          ...(tlsInsecure ? ['--tlsInsecure'] : []),
         ];
 
         if (backupJob.databases.length > 0) {

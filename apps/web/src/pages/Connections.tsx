@@ -22,7 +22,7 @@ export function ConnectionsPage() {
             Connections
           </h1>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-3)' }}>
-            Manage your MongoDB deployments
+            Manage your MongoDB, PostgreSQL, and MySQL deployments
           </p>
         </div>
         <button
@@ -66,7 +66,7 @@ export function ConnectionsPage() {
           <Database size={48} style={{ color: 'var(--text-4)', marginBottom: 16 }}/>
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--text-1)' }}>No connections yet</h3>
           <p style={{ margin: '4px 0 16px', fontSize: 13, color: 'var(--text-3)' }}>
-            Add your first MongoDB connection to get started.
+            Add your first database connection to get started.
           </p>
           <button
             onClick={() => setAddOpen(true)}
