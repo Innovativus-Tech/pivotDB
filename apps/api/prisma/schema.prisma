@@ -18,6 +18,7 @@ model Profile {
   syncJobs      SyncJob[]
   backupJobs    BackupJob[]
   migrationJobs MigrationJob[]
+  migrationJobsV2 MigrationJobV2[]
   exportJobs    ExportJob[]
   alertRules    AlertRule[]
   alertEvents   AlertEvent[]
@@ -67,6 +68,8 @@ model Connection {
   savedQueries        SavedQuery[]
   migrationJobsSource MigrationJob[] @relation("MigrationSource")
   migrationJobsDest   MigrationJob[] @relation("MigrationDest")
+  migrationJobsV2Source MigrationJobV2[] @relation("MigrationV2Source")
+  migrationJobsV2Dest   MigrationJobV2[] @relation("MigrationV2Dest")
   restoreRuns         RestoreRun[]   @relation("RestoreTargetConnection")
 }
 
@@ -273,4 +276,91 @@ model AuditEvent {
   target    String
   timestamp DateTime @default(now())
   metadata  Json?
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-engine migration (Phase 1C onwards)
+//
+// MigrationJobV2 / MigrationRunV2 are intentionally separate from the legacy
+// MigrationJob / MigrationRun rows: the legacy flow shells out to mongodump+
+// mongorestore (same-engine Mongo→Mongo only) and we keep it around because
+// it preserves indexes natively and is faster than our streamed pipeline.
+// V2 is the schemaless cross-engine pipeline implemented in src/migration/.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MigrationJobV2 {
+  id                   String     @id @default(cuid())
+  name                 String
+  profileId            String
+  profile              Profile    @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  sourceConnId         String
+  source               Connection @relation("MigrationV2Source", fields: [sourceConnId], references: [id], onDelete: Cascade)
+  destConnId           String
+  destination          Connection @relation("MigrationV2Dest",   fields: [destConnId],   references: [id], onDelete: Cascade)
+
+  // Cached from the connections so the worker doesn't need to JOIN on every batch
+  sourceType           String     // "mongodb" | "postgres" | "mysql"
+  destType             String
+
+  // Optional scoping. For Mongo this is the database name; for SQL it's the schema name.
+  sourceDatabase       String?
+  // When migrating into Mongo we can pin every collection into ONE database
+  // regardless of source schema. For SQL targets this is the schema name.
+  destDatabase         String?
+
+  // Per-namespace overrides (rename, include/exclude, type casts, embed-vs-ref).
+  // Shape defined in src/migration/job-config.ts.
+  schemaMapping        Json?
+  // Global rules: nullHandling, embedDefaults, decimalHandling, etc.
+  typeMappingRules     Json?
+
+  sampleSize           Int        @default(1000)
+  batchSize            Int        @default(1000)
+  parallelism          Int        @default(1)
+  dropExisting         Boolean    @default(false)
+  failOnTypeConflict   Boolean    @default(false)
+
+  createdBy            String
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  runs                 MigrationRunV2[]
+}
+
+model MigrationRunV2 {
+  id              String         @id @default(cuid())
+  jobId           String
+  job             MigrationJobV2 @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  profileId       String
+
+  /// queued | running | succeeded | partial | failed | cancelled
+  phase           String         @default("queued")
+  /// True iff a user requested cancellation; the worker checks between batches.
+  cancelRequested Boolean        @default(false)
+  /// True iff this run was a dry-run (inference + warnings only, no writes).
+  dryRun          Boolean        @default(false)
+
+  startedAt       DateTime?
+  finishedAt      DateTime?
+
+  // Roll-up counts. Int (not BigInt) — 2B rows/migration is a generous ceiling
+  // and avoids Prisma's BigInt JSON serialisation pitfalls.
+  totalNamespaces Int            @default(0)
+  succeededNs     Int            @default(0)
+  failedNs        Int            @default(0)
+  totalWritten    Int            @default(0)
+  totalSkipped    Int            @default(0)
+  totalFailed     Int            @default(0)
+
+  /// Per-namespace last-known state: { "<db>.<table>": { phase, written, … } }
+  progress        Json?
+  /// Warnings emitted by inference + per-row mapping (capped).
+  warnings        Json?
+  /// Per-namespace fatal errors.
+  errors          Json?
+  /// Generated DDL preview (Mongo→SQL only). Stored after the inference phase.
+  ddlPreview      String?
+
+  createdAt       DateTime       @default(now())
 }
