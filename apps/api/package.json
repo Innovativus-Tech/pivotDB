@@ -9,7 +9,9 @@
     "start": "node dist/index.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "migrate:mongo-to-pg": "tsx scripts/migrate-mongo-to-pg.ts",
+    "migrate:pg-to-mongo": "tsx scripts/migrate-pg-to-mongo.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
