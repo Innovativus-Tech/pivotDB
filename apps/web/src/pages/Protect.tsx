@@ -412,44 +412,65 @@ function CreateJobForm({ connections, onCreated }: { connections: Connection[]; 
           <select value={connId} onChange={(e) => setConnId(e.target.value)}
             className="w-full bg-input border border-border rounded px-3 py-2 text-sm">
             <option value="">Select connection…</option>
-            {/* Backup uses mongodump/mongorestore (Mongo-only) — SQL conns
-                would fail. Hide them until a SQL backup story exists. */}
-            {connections.filter((c) => c.dbType === 'mongodb').map((c) =>
-              <option key={c.id} value={c.id}>{c.name}</option>
+            {/* All engines supported as of Phase 3B. Each engine uses its
+                native dump/restore CLI on the backend:
+                  mongodb  → mongodump   / mongorestore
+                  postgres → pg_dump -Fc / pg_restore
+                  mysql    → mysqldump   / mysql */}
+            {connections.map((c) =>
+              <option key={c.id} value={c.id}>{c.name} ({c.dbType})</option>
             )}
           </select>
-          {connections.some((c) => c.dbType !== 'mongodb') && (
-            <p className="text-xs text-muted-foreground mt-1">
-              Backups use mongodump — MongoDB connections only.
-            </p>
-          )}
         </div>
 
-        <div className="col-span-2">
-          <label className="text-xs text-muted-foreground mb-1 block">
-            Databases to back up <span className="text-muted-foreground/60">(leave empty = all databases)</span>
-          </label>
-          <div className="flex gap-2">
-            <input value={dbInput} onChange={(e) => setDbInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addDb()}
-              placeholder="e.g. myapp_prod — press Enter to add"
-              className="flex-1 bg-input border border-border rounded px-3 py-2 text-sm" />
-            <button onClick={addDb} className="px-3 py-2 text-sm rounded border border-border hover:bg-secondary">
-              Add
-            </button>
-          </div>
-          {databases.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {databases.map((db) => (
-                <span key={db} className="flex items-center gap-1 bg-secondary px-2 py-1 rounded text-xs">
-                  {db}
-                  <button onClick={() => setDatabases((prev) => prev.filter((d) => d !== db))}
-                    className="text-muted-foreground hover:text-destructive ml-1">×</button>
-                </span>
-              ))}
+        {/* The Databases field is meaningful for Mongo (multi-DB cluster) and
+            MySQL (mysqldump --databases). PG connections are bound to a
+            single DB by URI, so the field is hidden for PG. */}
+        {(() => {
+          const conn = connections.find((c) => c.id === connId)
+          if (conn?.dbType === 'postgres') {
+            return (
+              <div className="col-span-2 bg-secondary/40 border border-border rounded px-3 py-2 text-xs text-muted-foreground">
+                Postgres connections back up the database in the connection URI.
+                To back up a different database, add a separate connection.
+              </div>
+            )
+          }
+          const isMysql = conn?.dbType === 'mysql'
+          const helpText = isMysql
+            ? '(leave empty = the database in the connection URI)'
+            : '(leave empty = all databases)'
+          const placeholderText = isMysql
+            ? 'e.g. mydb — press Enter to add'
+            : 'e.g. myapp_prod — press Enter to add'
+          return (
+            <div className="col-span-2">
+              <label className="text-xs text-muted-foreground mb-1 block">
+                Databases to back up <span className="text-muted-foreground/60">{helpText}</span>
+              </label>
+              <div className="flex gap-2">
+                <input value={dbInput} onChange={(e) => setDbInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addDb()}
+                  placeholder={placeholderText}
+                  className="flex-1 bg-input border border-border rounded px-3 py-2 text-sm" />
+                <button onClick={addDb} className="px-3 py-2 text-sm rounded border border-border hover:bg-secondary">
+                  Add
+                </button>
+              </div>
+              {databases.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {databases.map((db) => (
+                    <span key={db} className="flex items-center gap-1 bg-secondary px-2 py-1 rounded text-xs">
+                      {db}
+                      <button onClick={() => setDatabases((prev) => prev.filter((d) => d !== db))}
+                        className="text-muted-foreground hover:text-destructive ml-1">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          )
+        })()}
 
         <div>
           <label className="text-xs text-muted-foreground mb-1 block">Schedule (cron)</label>

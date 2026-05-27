@@ -154,6 +154,35 @@ export async function connectionRoutes(app: FastifyInstance) {
     }
   });
 
+  // ── SQL monitor snapshot (Phase 2B) ────────────────────────────────────────
+  // Returns the SqlMonitorSnapshot for a Postgres or MySQL connection.
+  // Mongo connections must use the existing /monitor/snapshot endpoint.
+  app.get('/:id/sql/monitor/snapshot', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
+
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+    if (conn.dbType === 'mongodb') {
+      return reply.code(400).send({ error: 'Use /monitor/snapshot for MongoDB connections' });
+    }
+
+    try {
+      const { getSqlMonitorSnapshot } = await import('../services/sql-monitor.service.js');
+      return await getSqlMonitorSnapshot(id);
+    } catch (err) {
+      // AggregateError (DNS / TCP multi-attempt failure) has an empty .message;
+      // unwrap the first inner error so the UI shows the real cause.
+      let msg: string;
+      if (err instanceof AggregateError && err.errors?.length) {
+        msg = (err.errors[0] as Error).message ?? String(err.errors[0]);
+      } else {
+        msg = (err as Error).message ?? String(err);
+      }
+      return reply.code(500).send({ error: `Cannot connect to ${conn.dbType} server: ${msg}` });
+    }
+  });
+
   // ── Auth routes ────────────────────────────────────────────────────────────
 
   app.post('/auth/login', async (req, reply) => {

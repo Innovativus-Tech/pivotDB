@@ -29,7 +29,10 @@ RUN apt-get update && \
   echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
     > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
   apt-get update && \
-  apt-get install -y --no-install-recommends mongodb-database-tools && \
+  apt-get install -y --no-install-recommends \
+    mongodb-database-tools \
+    postgresql-client \
+    default-mysql-client && \
   rm -rf /var/lib/apt/lists/*
 
 # Copy the entire node_modules from the build stage (includes prisma CLI and
@@ -67,7 +70,10 @@ RUN apt-get update && \
   echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
     > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
   apt-get update && \
-  apt-get install -y --no-install-recommends mongodb-database-tools && \
+  apt-get install -y --no-install-recommends \
+    mongodb-database-tools \
+    postgresql-client \
+    default-mysql-client && \
   rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm

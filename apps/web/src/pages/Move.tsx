@@ -52,16 +52,41 @@ function ExportTab() {
   const [excludeColls, setExcludeColls] = useState<string[]>([])
   const [format, setFormat] = useState<'csv' | 'json'>('json')
 
+  const selectedConn = connections.find((c) => c.id === connId)
+  const isSql = selectedConn?.dbType === 'postgres' || selectedConn?.dbType === 'mysql'
+
+  // Multi-engine endpoints — work for Mongo, PG, and MySQL.
+  // For SQL: returned `databases` are schemas (PG) or databases (MySQL);
+  // returned namespaces are tables. We keep the variable names `databases`
+  // and `colls` for parity with the Mongo path; the UI labels rename them.
   const { data: databases = [] } = useQuery({
     queryKey: ['databases', connId],
-    queryFn: () => api.get<{ name: string }[]>(`/api/connections/${connId}/explore/databases`),
+    queryFn: () => api.get<{ dbType: string; databases: string[] }>(`/api/connections/${connId}/databases`)
+      .then((r) => r.databases.map((name) => ({ name }))),
     enabled: !!connId,
   })
   const { data: colls = [] } = useQuery({
     queryKey: ['collections', connId, db],
-    queryFn: () => api.get<{ name: string }[]>(`/api/connections/${connId}/explore/databases/${db}/collections`),
+    queryFn: async () => {
+      if (isSql) {
+        // SQL: discoverSchema returns namespaces with column metadata; we only
+        // need names here.
+        const r = await api.get<{ dbType: string; namespaces: Array<{ name: string }> }>(
+          `/api/connections/${connId}/schema?database=${encodeURIComponent(db)}`,
+        )
+        return r.namespaces.map((n) => ({ name: n.name }))
+      }
+      return api.get<{ name: string }[]>(`/api/connections/${connId}/explore/databases/${db}/collections`)
+    },
     enabled: !!(connId && db),
   })
+
+  // Engine-aware copy
+  const itemLabel    = isSql ? 'Table'  : 'Collection'
+  const itemsLabel   = isSql ? 'Tables' : 'Collections'
+  const containerLbl = !selectedConn ? 'Database'
+    : selectedConn.dbType === 'postgres' ? 'Schema'
+    : 'Database'
   const { data: jobs = [], refetch } = useQuery({
     queryKey: ['export-jobs', connId],
     queryFn: () => api.get<ExportJob[]>(`/api/export?connectionId=${connId}`),
@@ -91,12 +116,14 @@ function ExportTab() {
       <div className="bg-card border border-border rounded-lg p-5">
         <h2 className="font-semibold mb-4">New Export</h2>
 
-        {/* Export mode toggle */}
+        {/* Export mode toggle — labels switch to Table/Schema for SQL conns */}
         <div className="flex gap-4 mb-4">
           {(['collection', 'database'] as const).map((m) => (
             <label key={m} className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="radio" value={m} checked={exportMode === m} onChange={() => { setExportMode(m); setColl(''); setExcludeColls([]) }} />
-              {m === 'collection' ? 'Single Collection' : 'Entire Database'}
+              {m === 'collection'
+                ? (isSql ? 'Single Table'   : 'Single Collection')
+                : (isSql ? `Entire ${containerLbl}` : 'Entire Database')}
             </label>
           ))}
         </div>
@@ -107,20 +134,15 @@ function ExportTab() {
             <select value={connId} onChange={(e) => { setConnId(e.target.value); setDb(''); setColl('') }}
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm">
               <option value="">Select…</option>
-              {/* Export uses Mongo-only export endpoints; hide SQL conns to
-                  prevent silent failures. Cross-engine "export" lands later. */}
-              {connections.filter((c) => c.dbType === 'mongodb').map((c) =>
-                <option key={c.id} value={c.id}>{c.name}</option>
+              {/* All engines supported as of Phase 3A. Show dbType inline so
+                  the user knows which engine each connection points at. */}
+              {connections.map((c) =>
+                <option key={c.id} value={c.id}>{c.name} ({c.dbType})</option>
               )}
             </select>
-            {connections.some((c) => c.dbType !== 'mongodb') && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Export currently supports MongoDB only.
-              </p>
-            )}
           </div>
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Database</label>
+            <label className="text-xs text-muted-foreground mb-1 block">{containerLbl}</label>
             <select value={db} onChange={(e) => { setDb(e.target.value); setColl('') }}
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm" disabled={!connId}>
               <option value="">Select…</option>
@@ -130,7 +152,7 @@ function ExportTab() {
 
           {exportMode === 'collection' ? (
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Collection</label>
+              <label className="text-xs text-muted-foreground mb-1 block">{itemLabel}</label>
               <select value={coll} onChange={(e) => setColl(e.target.value)}
                 className="w-full bg-input border border-border rounded px-3 py-2 text-sm" disabled={!db}>
                 <option value="">Select…</option>
@@ -139,7 +161,7 @@ function ExportTab() {
             </div>
           ) : (
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Exclude Collections (optional)</label>
+              <label className="text-xs text-muted-foreground mb-1 block">Exclude {itemsLabel} (optional)</label>
               <div className="bg-input border border-border rounded p-2 max-h-32 overflow-y-auto">
                 {colls.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{db ? 'Loading…' : 'Select a database first'}</p>

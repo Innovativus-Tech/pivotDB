@@ -46,6 +46,8 @@ export class MetricsService {
     const connections = await prisma.connection.findMany();
 
     for (const conn of connections) {
+      // Skip non-MongoDB connections — they have their own metrics service (sql-metrics.service.ts)
+      if ((conn as { dbType?: string }).dbType && (conn as { dbType?: string }).dbType !== 'mongodb') continue;
       try {
         const uri    = decrypt(conn.encryptedUri);
         const client = new MongoClient(uri, { serverSelectionTimeoutMS: 3000 });

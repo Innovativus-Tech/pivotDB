@@ -409,3 +409,47 @@ export interface MigrationV2Run {
   ddlPreview: string | null
   createdAt: string
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SQL monitor snapshot (Phase 2B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SqlMonitorSnapshot {
+  version: string
+  uptimeSeconds: number
+  currentDatabase: string
+
+  connections: {
+    current: number
+    max: number | null
+    active: number
+    idle: number
+  }
+
+  throughput: {
+    transactionsPerSec: number | null
+    queriesPerSec: number | null
+    cacheHitRatio: number | null
+  }
+
+  topTables: Array<{
+    schema: string
+    name: string
+    sizeBytes: number
+    rowCount: number
+  }>
+
+  activeQueries: Array<{
+    pid: string
+    user: string
+    database: string
+    state: string
+    durationMs: number
+    query: string
+  }>
+
+  replication: {
+    isReplica: boolean
+    lagSeconds: number | null
+  } | null
+}

@@ -6,6 +6,7 @@ import { profileScope, requireAdmin } from '../plugins/auth.js';
 import { buildMigrationPlan } from '../migration/service.js';
 import { runMigration } from '../migration/pipeline.js';
 import { buildCreateTable } from '../migration/ddl/postgres-ddl.js';
+import { buildMysqlCreateTable } from '../migration/ddl/mysql-ddl.js';
 import type { InferredSchema, SchemaWarning } from '../migration/types.js';
 
 interface JWTUser {
@@ -153,9 +154,38 @@ export async function migrationV2Routes(app: FastifyInstance) {
       await prisma.migrationJobV2.delete({ where: { id: temp.id } }).catch(() => {});
     }
 
-    // For Mongo→Postgres, generate DDL preview. For PG→Mongo there's no DDL.
+    // Generate DDL preview for Mongo→SQL directions. SQL→Mongo has no DDL.
     const ddl: string[] = [];
     if (src.dbType === 'mongodb' && dst.dbType === 'postgres') {
+      for (const s of schemas) {
+        ddl.push(...buildCreateTable(s, {
+          schemaName: body.destDatabase ?? 'public',
+          tableName: s.namespace.name,
+          ifNotExists: !body.dropExisting,
+          drop: body.dropExisting,
+        }));
+      }
+    } else if (src.dbType === 'mongodb' && dst.dbType === 'mysql') {
+      for (const s of schemas) {
+        ddl.push(...buildMysqlCreateTable(s, {
+          dbName: body.destDatabase ?? s.namespace.database,
+          tableName: s.namespace.name,
+          ifNotExists: !body.dropExisting,
+          drop: body.dropExisting,
+        }));
+      }
+    } else if (src.dbType === 'postgres' && dst.dbType === 'mysql') {
+      // PG→MySQL: PG schema is already inferred; generate MySQL DDL from it.
+      for (const s of schemas) {
+        ddl.push(...buildMysqlCreateTable(s, {
+          dbName: body.destDatabase ?? s.namespace.database,
+          tableName: s.namespace.name,
+          ifNotExists: !body.dropExisting,
+          drop: body.dropExisting,
+        }));
+      }
+    } else if (src.dbType === 'mysql' && dst.dbType === 'postgres') {
+      // MySQL→PG: MySQL schema is already inferred; generate PG DDL from it.
       for (const s of schemas) {
         ddl.push(...buildCreateTable(s, {
           schemaName: body.destDatabase ?? 'public',

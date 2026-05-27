@@ -11,6 +11,7 @@ import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../crypto/encrypt.js';
 import { getFreshClient } from '../lib/mongo.js';
+import { runSqlTableExport, runSqlSchemaExport } from './sql-export.job.js';
 
 // tar is CJS — require it
 const require = createRequire(import.meta.url);
@@ -220,7 +221,20 @@ export function startExportWorker() {
     try {
       let fileKey: string;
 
-      if (exportJob.exportType === 'database') {
+      // Dispatch by engine: Mongo connections use the original
+      // collection/database export paths; SQL connections use the
+      // PostgresReader / MySqlReader-backed runners.
+      const conn = await prisma.connection.findUniqueOrThrow({
+        where: { id: exportJob.connectionId },
+        select: { dbType: true },
+      });
+      const isSql = conn.dbType === 'postgres' || conn.dbType === 'mysql';
+
+      if (isSql) {
+        fileKey = exportJob.exportType === 'database'
+          ? await runSqlSchemaExport(jobId)
+          : await runSqlTableExport(jobId);
+      } else if (exportJob.exportType === 'database') {
         fileKey = await runDatabaseExport(jobId);
       } else {
         fileKey = await runCollectionExport(jobId);

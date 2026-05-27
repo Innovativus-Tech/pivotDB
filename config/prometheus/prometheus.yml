@@ -3,7 +3,16 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # The API can run in two places depending on environment:
+  #   - In Docker as the `api` service (production / `docker compose up api`)
+  #   - On the host machine via `pnpm dev` (local development)
+  # We list both targets - Prometheus marks whichever is unreachable as DOWN
+  # but happily scrapes the one that responds. The metrics produced are
+  # identical so dashboards work either way.
   - job_name: 'mongodb-visualizer-api'
     static_configs:
-      - targets: ['api:3001']
+      - targets:
+          - 'api:3001'                    # Docker service name (prod)
+          - 'host.docker.internal:3001'   # Host machine (Mac/Win Docker Desktop;
+                                          # needs extra_hosts on Linux)
     metrics_path: '/metrics'

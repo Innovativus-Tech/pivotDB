@@ -85,20 +85,36 @@ function WizardTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcId, dstId])
 
-  // Sensible default destDatabase
+  // Sensible default destDatabase per destination engine.
+  //   • Mongo  — match the source DB name so the structure is preserved.
+  //   • PG     — public is always the default schema.
+  //   • MySQL  — match the source name. If the migration user lacks
+  //              CREATE DATABASE privilege the writer will surface a clear
+  //              error pointing the user back here.
   useEffect(() => {
     if (dst?.dbType === 'mongodb' && sourceDatabase && !destDatabase) {
       setDestDatabase(sourceDatabase)
     } else if (dst?.dbType === 'postgres' && !destDatabase) {
       setDestDatabase('public')
+    } else if (dst?.dbType === 'mysql' && sourceDatabase && !destDatabase) {
+      setDestDatabase(sourceDatabase)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceDatabase, dstId])
 
-  // Phase 1 supports mongodb↔postgres. MySQL lands in Phase 2.
-  const supportedPair =
-    (src?.dbType === 'mongodb' && dst?.dbType === 'postgres') ||
-    (src?.dbType === 'postgres' && dst?.dbType === 'mongodb')
+  // Supported directions: mongodb↔postgres (Phase 1), mongodb↔mysql (Phase 2),
+  // postgres↔mysql (Phase 3). Same-engine pairs use Move/Sync instead.
+  const supportedPair = !!(src && dst && src.id !== dst.id && (() => {
+    const s = src.dbType, d = dst.dbType
+    return (
+      (s === 'mongodb'  && d === 'postgres') ||
+      (s === 'postgres' && d === 'mongodb')  ||
+      (s === 'mongodb'  && d === 'mysql')    ||
+      (s === 'mysql'    && d === 'mongodb')  ||
+      (s === 'postgres' && d === 'mysql')    ||
+      (s === 'mysql'    && d === 'postgres')
+    )
+  })())
 
   const previewMutation = useMutation({
     mutationFn: () => api.post<PreviewResponse>('/api/migration-v2/preview', {
@@ -231,7 +247,6 @@ function Step1(p: {
   })
 
   const isMongoSrc = p.src?.dbType === 'mongodb'
-  const isMongoDst = p.dst?.dbType === 'mongodb'
 
   return (
     <div className="space-y-4">
@@ -245,11 +260,11 @@ function Step1(p: {
             connections={p.connections.filter(c => c.id !== p.srcId)} onChange={p.setDstId} />
         </div>
 
-        {p.src && p.dst && !p.supportedPair && (
+        {p.src && p.dst && p.src.id !== p.dst.id && !p.supportedPair && (
           <p className="mt-3 text-xs text-amber-500 flex items-center gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Direction {p.src.dbType} → {p.dst.dbType} isn't supported in this version.
-            Phase 1 supports <b className="mx-1">mongodb ↔ postgres</b>; MySQL lands in Phase 2.
+            Direction <b className="mx-1">{p.src.dbType} → {p.dst.dbType}</b> isn't supported yet.
+            Supported: <b className="mx-1">mongodb ↔ postgres</b>, <b className="mx-1">mongodb ↔ mysql</b>, and <b className="mx-1">postgres ↔ mysql</b>.
           </p>
         )}
 
@@ -273,13 +288,26 @@ function Step1(p: {
             )}
           </Field>
 
-          <Field label={isMongoDst ? 'Dest database (optional)' : 'Dest schema'}>
+          <Field label={
+            p.dst?.dbType === 'mongodb' ? 'Dest database (optional)' :
+            p.dst?.dbType === 'mysql'   ? 'Dest database' :
+                                           'Dest schema'
+          }>
             <input
               value={p.destDatabase}
               onChange={(e) => p.setDestDatabase(e.target.value)}
-              placeholder={isMongoDst ? '(matches source if blank)' : 'public'}
+              placeholder={
+                p.dst?.dbType === 'mongodb' ? '(matches source if blank)' :
+                p.dst?.dbType === 'mysql'   ? 'testdb (must exist or user needs CREATE)' :
+                                               'public'
+              }
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm font-mono"
             />
+            {p.dst?.dbType === 'mysql' && (
+              <p className="text-xs text-muted-foreground mt-1">
+                If this database doesn't exist, the migration user needs CREATE DATABASE privilege.
+              </p>
+            )}
           </Field>
         </div>
 
