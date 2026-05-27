@@ -145,6 +145,16 @@ export interface NamespaceWriter {
   finalize(ns: NamespaceRef): Promise<void>;
   /** Release any held resources. Idempotent. */
   close(): Promise<void>;
+  /**
+   * Apply a single CDC event. Optional — writers that don't support live
+   * replication can leave it unset and the sync worker will refuse to use
+   * that destination for CDC mode.
+   *
+   * Implementations should be idempotent: applying the same event twice
+   * must not corrupt the destination, because the worker may re-deliver
+   * an event after a crash before its cursor was persisted.
+   */
+  applyChange?(event: ChangeEvent): Promise<void>;
 }
 
 export interface WriteResult {
@@ -184,6 +194,82 @@ export interface MigrationProgress {
   failed: number;
   approxTotal?: number;
   error?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CDC (Phase 4) — change-data-capture streaming, on top of the migration types.
+//
+// The Reader/Writer interfaces above describe a *bounded* copy: walk the
+// source once, apply each row, finalise. CDC is *unbounded*: a CdcSource
+// produces a never-ending stream of ChangeEvent, which the writer applies
+// via applyChange() (added to NamespaceWriter as an optional method so
+// engines that don't yet support CDC writes can opt out).
+//
+// Why a separate type instead of reusing SourceRecord?
+//   - CDC events carry an op (insert/update/delete) and sometimes a "before"
+//     image, which a bulk reader never sees.
+//   - Each event has an engine-specific resume position (Mongo resumeToken,
+//     PG LSN, MySQL binlog file+pos). Persisting that position is what makes
+//     the stream resumable across worker restarts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ChangeOp = 'insert' | 'update' | 'delete';
+
+/**
+ * One CDC event from a source database, normalised across engines.
+ *
+ * `doc` is the post-change row for insert/update, and undefined for delete.
+ * `key` is the primary key columns / Mongo _id — always present so the writer
+ * can locate the destination row for update/delete without re-reading.
+ *
+ * `cursor` is an OPAQUE engine-specific resume position. The sync worker
+ * persists it back to CdcSyncJob.cursor after each successful applyChange.
+ */
+export interface ChangeEvent {
+  op: ChangeOp;
+  ns: NamespaceRef;
+  /** Primary key fields (Mongo: { _id }, SQL: { pk1: …, pk2: … }). */
+  key: Record<string, unknown>;
+  /** Post-change row. Undefined on delete. */
+  doc?: DestRecord;
+  /** Pre-change row when the source captured it (PG REPLICA IDENTITY FULL,
+   *  MySQL binlog UPDATE_ROWS_EVENT before-image). Often missing. */
+  before?: DestRecord;
+  /** Opaque resume position written back to the SyncJob row after apply. */
+  cursor: unknown;
+  /** Wall-clock time the event was committed at the source, if available. */
+  committedAt?: Date;
+}
+
+/**
+ * CdcSource — yields a forever-stream of ChangeEvent for a source database.
+ *
+ * Implementations MUST:
+ *   - resume from `startCursor` when provided (after a worker restart)
+ *   - call `keepalive()` periodically so the worker can update lastEventAt
+ *     even when no events are flowing (heartbeat-only ticks)
+ *   - shut down cleanly when the consumer breaks out of the iterator
+ *
+ * Bootstrap is NOT this interface's job — the worker calls the matching
+ * NamespaceReader for the snapshot phase, then opens the CdcSource at the
+ * cursor captured before the snapshot started.
+ */
+export interface CdcSource {
+  /**
+   * Capture the *current* resume position WITHOUT starting the stream.
+   * Called once before bootstrap so the snapshot+tail handoff is clean
+   * (no gap, no double-apply).
+   */
+  captureStartCursor(): Promise<unknown>;
+
+  /**
+   * Open the change stream starting from `startCursor`. When null/undefined,
+   * tail from "now" (post-snapshot or skip-bootstrap modes).
+   */
+  stream(opts: { startCursor?: unknown }): AsyncIterable<ChangeEvent>;
+
+  /** Release any held resources. Idempotent. */
+  close(): Promise<void>;
 }
 
 /** Options accepted by the pipeline orchestrator. */

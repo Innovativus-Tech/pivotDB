@@ -1,6 +1,6 @@
 import { MongoClient, type Collection, type Db } from 'mongodb';
 import type {
-  DestRecord, InferredColumn, InferredSchema, NamespaceRef,
+  ChangeEvent, DestRecord, InferredColumn, InferredSchema, NamespaceRef,
   NamespaceWriter, WriteResult,
 } from '../types.js';
 
@@ -131,6 +131,29 @@ export class MongoWriter implements NamespaceWriter {
 
   async finalize(_ns: NamespaceRef): Promise<void> {
     // Nothing to do — indexes built in init(), no ANALYZE equivalent.
+  }
+
+  /**
+   * CDC apply path. Idempotent by design:
+   *   - insert  → replaceOne(_id, doc, upsert:true) so a redelivered event
+   *               after a worker crash overwrites instead of duplicating.
+   *   - update  → same replaceOne shape; the source already gave us the full
+   *               post-image (Mongo change streams default to fullDocument
+   *               "updateLookup" — we pass that in the adapter).
+   *   - delete  → deleteOne by key. No-op if already gone (also idempotent).
+   */
+  async applyChange(event: ChangeEvent): Promise<void> {
+    const db = await this.db(event.ns);
+    const coll = db.collection(event.ns.name);
+    const filter = event.key;
+
+    if (event.op === 'delete') {
+      await coll.deleteOne(filter);
+      return;
+    }
+
+    if (!event.doc) throw new Error(`Mongo CDC ${event.op} missing doc`);
+    await coll.replaceOne(filter, event.doc, { upsert: true });
   }
 
   async close(): Promise<void> {

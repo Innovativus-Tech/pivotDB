@@ -25,6 +25,22 @@ services:
     volumes:
       - pg-test-data:/var/lib/postgresql/data
       - ./postgres:/docker-entrypoint-initdb.d:ro
+    # CDC sync (Phase 4C) needs logical replication enabled at the server
+    # level. These params can't be set via SQL — they must be in postgresql.conf
+    # at startup. The `command:` override appends them via `-c`.
+    #   wal_level=logical       enables decoding of WAL into change events
+    #   max_replication_slots   one slot per active CdcSyncJob (4 is plenty for dev)
+    #   max_wal_senders         one sender per active stream
+    # Managed PG (RDS / Supabase / Cloud SQL) ships with these already set —
+    # users connecting to those don't need to touch anything.
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U test -d testdb"]
       interval: 5s
@@ -44,9 +60,23 @@ services:
     volumes:
       - mysql-test-data:/var/lib/mysql
       - ./mysql:/docker-entrypoint-initdb.d:ro
+    # CDC sync (Phase 4D) needs the binary log in ROW format with FULL
+    # row images, plus a non-zero server_id. These are the defaults on
+    # MySQL 8.0+ but the test container's mysql:8.0 image doesn't always
+    # pick them up unless we set them explicitly here.
+    #   log_bin              enables binary logging
+    #   binlog_format=ROW    required for change-data-capture (zongji parses ROW events)
+    #   binlog_row_image=FULL row events include all columns (default in 8.0; explicit for clarity)
+    #   server_id=1          required for any binlog reader to connect as a replica
+    # Managed MySQL (RDS / Aurora / Cloud SQL) ships with binlog enabled — only
+    # the REPLICATION SLAVE / REPLICATION CLIENT grants are needed on the user.
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --server-id=1
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-utest", "-ptest"]
       interval: 5s

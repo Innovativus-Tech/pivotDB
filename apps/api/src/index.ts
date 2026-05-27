@@ -11,14 +11,14 @@ import { connectionRoutes } from './routes/connections.js';
 import { exploreRoutes } from './routes/explore.js';
 import { monitorRoutes, registerMonitorSocket } from './routes/monitor.js';
 import { exportRoutes } from './routes/export.js';
-import { syncRoutes } from './routes/sync.js';
+import { cdcSyncRoutes } from './routes/cdc-sync.js';
 import { backupRoutes } from './routes/backup.js';
 import { alertRoutes } from './routes/alerts.js';
 import { migrationRoutes } from './routes/migration.js';
 import { migrationV2Routes } from './routes/migration-v2.js';
 import { startMigrationV2Worker } from './migration/worker.js';
 import { startExportWorker } from './jobs/export.job.js';
-import { startSyncWorker } from './jobs/sync.job.js';
+import { startCdcWorker } from './jobs/cdc-sync.job.js';
 import { startBackupWorker } from './jobs/backup.job.js';
 import { startRestoreWorker } from './jobs/restore.job.js';
 import { startMigrationWorker } from './jobs/migration.job.js';
@@ -60,7 +60,9 @@ await app.register(async (api) => {
     await sub.register(exploreRoutes,    { prefix: '/connections' });
     await sub.register(monitorRoutes,    { prefix: '/connections' });
     await sub.register(exportRoutes,     { prefix: '/export' });
-    await sub.register(syncRoutes,       { prefix: '/sync' });
+    // CDC sync (Phase 4). Continuous, resumable replication — supersedes
+    // the legacy batch /sync (Mongo-only cron re-copy), which was removed.
+    await sub.register(cdcSyncRoutes,    { prefix: '/cdc-sync' });
     await sub.register(backupRoutes,     { prefix: '/backup' });
     await sub.register(alertRoutes,      { prefix: '/alerts' });
     await sub.register(migrationRoutes,   { prefix: '/migration' });
@@ -102,7 +104,7 @@ registerMonitorSocket(app);
 
 // Start BullMQ workers
 startExportWorker();
-startSyncWorker();
+startCdcWorker();
 startBackupWorker();
 startRestoreWorker();
 

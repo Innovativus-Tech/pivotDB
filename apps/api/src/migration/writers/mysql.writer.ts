@@ -1,6 +1,6 @@
 import mysql, { type Connection } from 'mysql2/promise';
 import type {
-  DestRecord, InferredSchema, NamespaceRef, NamespaceWriter, WriteResult,
+  ChangeEvent, DestRecord, InferredSchema, NamespaceRef, NamespaceWriter, WriteResult,
 } from '../types.js';
 import { buildMysqlCreateTable, mysqlColumnList } from '../ddl/mysql-ddl.js';
 
@@ -144,6 +144,55 @@ export class MySqlWriter implements NamespaceWriter {
     // MySQL doesn't need an explicit ANALYZE — the optimizer uses real-time
     // stats. We could run ANALYZE TABLE here for large loads, but it's optional.
     // Skip to keep finalize fast.
+  }
+
+  /**
+   * CDC apply path for MySQL.
+   *
+   * insert / update → INSERT … ON DUPLICATE KEY UPDATE col = VALUES(col), …
+   *   Idempotent: re-delivering the same event just updates to the same values.
+   *
+   * delete → DELETE WHERE pk_col = ? (AND …)
+   *   No-op if already gone — idempotent.
+   */
+  async applyChange(event: ChangeEvent): Promise<void> {
+    const conn = await this.connect();
+    const dbName = this.opts.dbName ?? event.ns.database;
+    const table = `\`${dbName}\`.\`${event.ns.name}\``;
+    const pkCols = Object.keys(event.key);
+
+    if (event.op === 'delete') {
+      const where = pkCols.map((c) => `\`${c}\` = ?`).join(' AND ');
+      await conn.query(
+        `DELETE FROM ${table} WHERE ${where}`,
+        pkCols.map((c) => encodeValue(event.key[c])),
+      );
+      return;
+    }
+
+    if (!event.doc) throw new Error(`MySQL CDC ${event.op} missing doc`);
+    const doc = event.doc;
+    const cols = Object.keys(doc);
+    const colList = cols.map((c) => `\`${c}\``).join(', ');
+    const placeholders = cols.map(() => '?').join(', ');
+    const vals = cols.map((c) => encodeValue(doc[c]));
+
+    // Non-PK columns get UPDATE on duplicate key.
+    const updateCols = cols.filter((c) => !pkCols.includes(c));
+    if (updateCols.length > 0) {
+      const updateSet = updateCols.map((c) => `\`${c}\` = VALUES(\`${c}\`)`).join(', ');
+      await conn.query(
+        `INSERT INTO ${table} (${colList}) VALUES (${placeholders})
+         ON DUPLICATE KEY UPDATE ${updateSet}`,
+        vals,
+      );
+    } else {
+      // All columns are PK — use INSERT IGNORE to skip exact duplicates.
+      await conn.query(
+        `INSERT IGNORE INTO ${table} (${colList}) VALUES (${placeholders})`,
+        vals,
+      );
+    }
   }
 
   async close(): Promise<void> {

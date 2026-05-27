@@ -8,6 +8,7 @@ import { MovePage } from './pages/Move'
 import { ProtectPage } from './pages/Protect'
 import { SettingsPage } from './pages/Settings'
 import { MigratePage } from './pages/Migrate'
+import { SyncPage } from './pages/Sync'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token')
@@ -32,6 +33,7 @@ export default function App() {
                 <Route path="/protect" element={<ProtectPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/migrate" element={<MigratePage />} />
+                <Route path="/sync" element={<SyncPage />} />
               </Routes>
             </Layout>
           </RequireAuth>

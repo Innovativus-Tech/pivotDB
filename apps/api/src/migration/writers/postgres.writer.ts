@@ -3,7 +3,7 @@ import { from as copyFrom } from 'pg-copy-streams';
 import { pipeline as streamPipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import type {
-  DestRecord, InferredSchema, NamespaceRef, NamespaceWriter, WriteResult,
+  ChangeEvent, DestRecord, InferredSchema, NamespaceRef, NamespaceWriter, WriteResult,
 } from '../types.js';
 import { buildCreateTable, pgColumnList } from '../ddl/postgres-ddl.js';
 
@@ -103,6 +103,63 @@ export class PostgresWriter implements NamespaceWriter {
     }
   }
 
+  /**
+   * CDC apply path for Postgres.
+   *
+   * insert / update → INSERT … ON CONFLICT (pk) DO UPDATE SET …
+   *   This is idempotent: re-delivering the same event on a crash-restart
+   *   just updates the row to the same values.
+   *
+   * delete → DELETE WHERE pk = $1
+   *   No-op if already gone — also idempotent.
+   *
+   * We derive PK columns from `event.key`. For SQL sources the key is always
+   * { col: value } pairs. For Mongo sources coming through a mapper the key
+   * is { _id: "hexstring" }.
+   */
+  async applyChange(event: ChangeEvent): Promise<void> {
+    const client = await this.connect();
+    const schemaName = this.opts.schemaName ?? 'public';
+    const table = `"${schemaName}"."${event.ns.name}"`;
+    const pkCols = Object.keys(event.key);
+
+    if (event.op === 'delete') {
+      const whereClauses = pkCols.map((c, i) => `"${c}" = $${i + 1}`).join(' AND ');
+      await client.query(
+        `DELETE FROM ${table} WHERE ${whereClauses}`,
+        pkCols.map((c) => pgVal(event.key[c])),
+      );
+      return;
+    }
+
+    if (!event.doc) throw new Error(`PG CDC ${event.op} missing doc`);
+    const doc = event.doc;
+    const cols = Object.keys(doc);
+    const vals = cols.map((c) => pgVal(doc[c]));
+    const colList = cols.map((c) => `"${c}"`).join(', ');
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+    const updateSet = cols
+      .filter((c) => !pkCols.includes(c))
+      .map((c) => `"${c}" = EXCLUDED."${c}"`)
+      .join(', ');
+    const conflictCols = pkCols.map((c) => `"${c}"`).join(', ');
+
+    if (updateSet) {
+      await client.query(
+        `INSERT INTO ${table} (${colList}) VALUES (${placeholders})
+         ON CONFLICT (${conflictCols}) DO UPDATE SET ${updateSet}`,
+        vals,
+      );
+    } else {
+      // All columns are part of PK — nothing to update; just ensure it exists.
+      await client.query(
+        `INSERT INTO ${table} (${colList}) VALUES (${placeholders})
+         ON CONFLICT (${conflictCols}) DO NOTHING`,
+        vals,
+      );
+    }
+  }
+
   async finalize(ns: NamespaceRef): Promise<void> {
     const client = await this.connect();
     const schemaName = this.opts.schemaName ?? 'public';
@@ -143,6 +200,15 @@ function* encodeRows(rows: DestRecord[], columns: string[]): Generator<string> {
     }
     yield fields.join('\t') + '\n';
   }
+}
+
+/** Coerce a value for pg parameterised query (not COPY). */
+function pgVal(v: unknown): unknown {
+  if (v === null || v === undefined) return null;
+  if (Buffer.isBuffer(v)) return v;
+  if (v instanceof Date) return v;
+  if (typeof v === 'object' || Array.isArray(v)) return JSON.stringify(v);
+  return v;
 }
 
 function encodeField(v: unknown): string {

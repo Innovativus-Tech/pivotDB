@@ -38,6 +38,9 @@ importers:
       '@types/archiver':
         specifier: ^7.0.0
         version: 7.0.0
+      '@vlasky/zongji':
+        specifier: ^0.6.1
+        version: 0.6.1(@types/node@20.19.41)
       archiver:
         specifier: ^8.0.0
         version: 8.0.0
@@ -80,6 +83,9 @@ importers:
       pg-copy-streams:
         specifier: ^7.0.0
         version: 7.0.0
+      pg-logical-replication:
+        specifier: ^2.4.0
+        version: 2.4.0
       pg-query-stream:
         specifier: ^4.15.0
         version: 4.15.0(pg@8.21.0)
@@ -1892,6 +1898,10 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
 
+  '@vlasky/zongji@0.6.1':
+    resolution: {integrity: sha512-803JbPT5sf1Dg6xse5VqoD1ju4S3ST7kJNaPApaFmPcoJSwzx//yM0AO7QaIHp54N+MJlZbZ7cc5ext4zC3o1g==}
+    engines: {node: '>= 18.0'}
+
   '@xyflow/react@12.10.2':
     resolution: {integrity: sha512-CgIi6HwlcHXwlkTpr0fxLv/0sRVNZ8IdwKLzzeCscaYBwpvfcH1QFOCeaTCuEn1FQEs/B8CjnTSjhs8udgmBgQ==}
     peerDependencies:
@@ -2052,6 +2062,10 @@ packages:
     resolution: {integrity: sha512-Asa2krT+XTPZINCS+2QcyS8WTkObE77RwkydwF7h6DmnKqbvlalz93m/dnphUyCa6SWSP51VgtEUf2FN+gelFQ==}
     engines: {node: '>=6.0.0'}
     hasBin: true
+
+  big-integer@1.6.52:
+    resolution: {integrity: sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==}
+    engines: {node: '>=0.6'}
 
   binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
@@ -2355,6 +2369,9 @@ packages:
   event-target-shim@5.0.1:
     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
     engines: {node: '>=6'}
+
+  eventemitter2@6.4.9:
+    resolution: {integrity: sha512-JEPTiaOt9f04oa6NOkc4aH+nVp5I3wEjpHbIPqfgCdD5v5bUzy7xQqwcVO2aDQgOWhI28da57HksMrzK9HlRxg==}
 
   eventemitter3@4.0.7:
     resolution: {integrity: sha512-8guHBZCwKnFhYdHr2ysuRWErTwhoN2X8XELRlrRwpmfeY2jjuUN4taQMsULKUVo1K4DvZl+0pgfyoysHxvmvEw==}
@@ -2840,6 +2857,10 @@ packages:
   pg-int8@1.0.1:
     resolution: {integrity: sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==}
     engines: {node: '>=4.0.0'}
+
+  pg-logical-replication@2.4.0:
+    resolution: {integrity: sha512-LaPYSacrvzxLQlX7lVsCJgqDdJQ4M+M3I5HX7WguXf2xttGyCpRjOvCY9uzEx+wgN0cVxfIww8CH0iw1vfRiiw==}
+    engines: {node: '>=16.9.0'}
 
   pg-pool@3.14.0:
     resolution: {integrity: sha512-gKtPkFdQPU3DksooVLi9LsjZxrsBUZIpa+7aVx+LV5pNh0KzP4Zleud2po+ConrxbuXGBJ6Hfer6hdgpIBpBaw==}
@@ -5431,6 +5452,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@vlasky/zongji@0.6.1(@types/node@20.19.41)':
+    dependencies:
+      big-integer: 1.6.52
+      iconv-lite: 0.7.2
+      mysql2: 3.22.3(@types/node@20.19.41)
+    transitivePeerDependencies:
+      - '@types/node'
+
   '@xyflow/react@12.10.2(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@xyflow/system': 0.0.76
@@ -5594,6 +5623,8 @@ snapshots:
   base64id@2.0.0: {}
 
   baseline-browser-mapping@2.10.29: {}
+
+  big-integer@1.6.52: {}
 
   binary-extensions@2.3.0: {}
 
@@ -5947,6 +5978,8 @@ snapshots:
   escalade@3.2.0: {}
 
   event-target-shim@5.0.1: {}
+
+  eventemitter2@6.4.9: {}
 
   eventemitter3@4.0.7: {}
 
@@ -6394,6 +6427,13 @@ snapshots:
       pg: 8.21.0
 
   pg-int8@1.0.1: {}
+
+  pg-logical-replication@2.4.0:
+    dependencies:
+      eventemitter2: 6.4.9
+      pg: 8.21.0
+    transitivePeerDependencies:
+      - pg-native
 
   pg-pool@3.14.0(pg@8.21.0):
     dependencies:

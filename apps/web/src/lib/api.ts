@@ -76,15 +76,55 @@ export interface ExportJob {
   createdAt: string
 }
 
-export interface SyncJob {
+// ─── Phase 4: CDC sync (continuous replication) ─────────────────────────────
+/** queued | bootstrapping | tailing | paused | failed */
+export type CdcSyncStatus = 'queued' | 'bootstrapping' | 'tailing' | 'paused' | 'failed'
+
+export interface CdcSyncRun {
   id: string
+  jobId: string
+  phase: string
+  startedAt: string
+  finishedAt: string | null
+  inserts: number
+  updates: number
+  deletes: number
+  errorsCount: number
+  lastError: string | null
+}
+
+export interface CdcSyncJob {
+  id: string
+  name: string
   sourceConnId: string
   destConnId: string
-  scope: unknown
-  writeMode: string
-  schedule?: string
+  sourceType: DbType
+  destType: DbType
+  sourceDatabase: string | null
+  destDatabase: string | null
+  namespaces: Array<{ database: string; name: string }> | null
+  bootstrap: 'snapshot' | 'tail'
+  status: CdcSyncStatus
+  lastEventAt: string | null
+  lastError: string | null
+  pauseRequested: boolean
   enabled: boolean
   createdAt: string
+  updatedAt: string
+  /** Included by GET endpoints. */
+  source?: { id: string; name: string; dbType: DbType }
+  destination?: { id: string; name: string; dbType: DbType }
+  runs?: CdcSyncRun[]
+}
+
+export interface CreateCdcSyncBody {
+  name: string
+  sourceConnId: string
+  destConnId: string
+  sourceDatabase?: string
+  destDatabase?: string
+  namespaces?: Array<{ database: string; name: string }>
+  bootstrap?: 'snapshot' | 'tail'
 }
 
 export interface BackupJob {

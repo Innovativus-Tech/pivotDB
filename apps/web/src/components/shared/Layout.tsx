@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   Database, Search, BarChart3, ArrowLeftRight, Shield, Settings as SettingsIcon, LogOut, GitMerge,
-  Sun, Moon,
+  Sun, Moon, Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
@@ -26,6 +26,7 @@ const NAV_GROUPS: NavGroup[] = [
     { to: '/monitor', icon: BarChart3,      label: 'Monitor' },
     { to: '/move',    icon: ArrowLeftRight, label: 'Move' },
     { to: '/migrate', icon: GitMerge,       label: 'Migrate' },
+    { to: '/sync',    icon: Zap,            label: 'Sync' },
   ]},
   { label: 'Governance', items: [
     { to: '/protect',  icon: Shield,      label: 'Protect' },

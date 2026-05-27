@@ -38,85 +38,113 @@ export async function buildMigrationPlan(jobId: string): Promise<MigrationPlan> 
     include: { source: true, destination: true },
   });
 
-  const sourceType = normaliseDbType(job.sourceType);
-  const destType = normaliseDbType(job.destType);
+  return buildPlanForPair({
+    sourceType:     job.sourceType,
+    destType:       job.destType,
+    sourceUri:      decrypt(job.source.encryptedUri),
+    destUri:        decrypt(job.destination.encryptedUri),
+    sourceDatabase: job.sourceDatabase,
+    destDatabase:   job.destDatabase,
+    dropExisting:   job.dropExisting,
+  });
+}
 
-  const sourceUri = decrypt(job.source.encryptedUri);
-  const destUri = decrypt(job.destination.encryptedUri);
+/**
+ * Engine-pair → (reader, writer, mapper) without needing a MigrationJobV2 row.
+ * Used by both the V2 migration worker and the CDC sync worker's bootstrap
+ * snapshot phase (Phase 4B+).
+ */
+export interface PairInputs {
+  sourceType: string;
+  destType: string;
+  sourceUri: string;
+  destUri: string;
+  sourceDatabase: string | null;
+  destDatabase: string | null;
+  /** Drop existing destination tables/collections before re-creating. */
+  dropExisting: boolean;
+}
+
+export function buildPlanForPair(input: PairInputs): MigrationPlan {
+  const sourceType = normaliseDbType(input.sourceType);
+  const destType   = normaliseDbType(input.destType);
+  const { sourceUri, destUri, dropExisting } = input;
+  const sourceDbRaw = input.sourceDatabase;
+  const destDbRaw   = input.destDatabase;
 
   const key = `${sourceType}→${destType}`;
   switch (key) {
     case 'mongodb→postgres': {
-      const sourceDb = job.sourceDatabase ?? '';
+      const sourceDb = sourceDbRaw ?? '';
       if (!sourceDb) throw new Error('sourceDatabase required for mongodb → postgres');
       return {
         reader: new MongoReader(sourceUri),
         writer: new PostgresWriter(destUri, {
-          schemaName: job.destDatabase ?? 'public',
-          dropExisting: job.dropExisting,
+          schemaName: destDbRaw ?? 'public',
+          dropExisting: dropExisting,
         }),
         makeMapper: (schema) => new MongoToPostgresMapper(schema),
         sourceDatabase: sourceDb,
       };
     }
     case 'postgres→mongodb': {
-      const sourceDb = job.sourceDatabase ?? 'public';
+      const sourceDb = sourceDbRaw ?? 'public';
       return {
         reader: new PostgresReader(sourceUri, { schemaName: sourceDb }),
         writer: new MongoWriter(destUri, {
-          dropExisting: job.dropExisting,
-          databaseOverride: job.destDatabase ?? undefined,
+          dropExisting: dropExisting,
+          databaseOverride: destDbRaw ?? undefined,
         }),
         makeMapper: (schema) => new PostgresToMongoMapper(schema),
         sourceDatabase: sourceDb,
       };
     }
     case 'mongodb→mysql': {
-      const sourceDb = job.sourceDatabase ?? '';
+      const sourceDb = sourceDbRaw ?? '';
       if (!sourceDb) throw new Error('sourceDatabase required for mongodb → mysql');
       return {
         reader: new MongoReader(sourceUri),
         writer: new MySqlWriter(destUri, {
-          dbName: job.destDatabase ?? undefined,
-          dropExisting: job.dropExisting,
+          dbName: destDbRaw ?? undefined,
+          dropExisting: dropExisting,
         }),
         makeMapper: (schema) => new MongoToMysqlMapper(schema),
         sourceDatabase: sourceDb,
       };
     }
     case 'mysql→mongodb': {
-      const sourceDb = job.sourceDatabase ?? '';
+      const sourceDb = sourceDbRaw ?? '';
       if (!sourceDb) throw new Error('sourceDatabase required for mysql → mongodb');
       return {
         reader: new MySqlReader(sourceUri, { dbName: sourceDb }),
         writer: new MongoWriter(destUri, {
-          dropExisting: job.dropExisting,
-          databaseOverride: job.destDatabase ?? undefined,
+          dropExisting: dropExisting,
+          databaseOverride: destDbRaw ?? undefined,
         }),
         makeMapper: (schema) => new MysqlToMongoMapper(schema),
         sourceDatabase: sourceDb,
       };
     }
     case 'postgres→mysql': {
-      const sourceDb = job.sourceDatabase ?? 'public';
+      const sourceDb = sourceDbRaw ?? 'public';
       return {
         reader: new PostgresReader(sourceUri, { schemaName: sourceDb }),
         writer: new MySqlWriter(destUri, {
-          dbName: job.destDatabase ?? undefined,
-          dropExisting: job.dropExisting,
+          dbName: destDbRaw ?? undefined,
+          dropExisting: dropExisting,
         }),
         makeMapper: (schema) => new PostgresToMysqlMapper(schema),
         sourceDatabase: sourceDb,
       };
     }
     case 'mysql→postgres': {
-      const sourceDb = job.sourceDatabase ?? '';
+      const sourceDb = sourceDbRaw ?? '';
       if (!sourceDb) throw new Error('sourceDatabase required for mysql → postgres');
       return {
         reader: new MySqlReader(sourceUri, { dbName: sourceDb }),
         writer: new PostgresWriter(destUri, {
-          schemaName: job.destDatabase ?? 'public',
-          dropExisting: job.dropExisting,
+          schemaName: destDbRaw ?? 'public',
+          dropExisting: dropExisting,
         }),
         makeMapper: (schema) => new MysqlToPostgresMapper(schema),
         sourceDatabase: sourceDb,

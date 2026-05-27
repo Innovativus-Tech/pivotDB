@@ -15,7 +15,7 @@ model Profile {
 
   users         User[]
   connections   Connection[]
-  syncJobs      SyncJob[]
+  cdcSyncJobs   CdcSyncJob[]
   backupJobs    BackupJob[]
   migrationJobs MigrationJob[]
   migrationJobsV2 MigrationJobV2[]
@@ -61,8 +61,6 @@ model Connection {
   updatedAt      DateTime @updatedAt
 
   backupJobs          BackupJob[]
-  syncJobsSource      SyncJob[]      @relation("SyncSource")
-  syncJobsDest        SyncJob[]      @relation("SyncDest")
   exportJobs          ExportJob[]
   alertRules          AlertRule[]
   savedQueries        SavedQuery[]
@@ -70,6 +68,8 @@ model Connection {
   migrationJobsDest   MigrationJob[] @relation("MigrationDest")
   migrationJobsV2Source MigrationJobV2[] @relation("MigrationV2Source")
   migrationJobsV2Dest   MigrationJobV2[] @relation("MigrationV2Dest")
+  cdcSyncJobsSource     CdcSyncJob[]     @relation("CdcSyncSource")
+  cdcSyncJobsDest       CdcSyncJob[]     @relation("CdcSyncDest")
   restoreRuns         RestoreRun[]   @relation("RestoreTargetConnection")
 }
 
@@ -121,24 +121,6 @@ model RestoreRun {
   finishedAt         DateTime?
   log                String?
   createdAt          DateTime   @default(now())
-}
-
-model SyncJob {
-  id           String     @id @default(cuid())
-  sourceConnId String
-  source       Connection @relation("SyncSource", fields: [sourceConnId], references: [id], onDelete: Cascade)
-  destConnId   String
-  destination  Connection @relation("SyncDest", fields: [destConnId], references: [id], onDelete: Cascade)
-  profileId    String
-  profile      Profile    @relation(fields: [profileId], references: [id])
-  scope        Json
-  writeMode    String
-  schedule     String?
-  transforms   Json?
-  enabled      Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-
-  runs JobRun[]
 }
 
 model ExportJob {
@@ -203,9 +185,6 @@ model JobRun {
   status      String
   counts      Json?
   errorReport Json?
-
-  syncJobId   String?
-  syncJob     SyncJob?   @relation(fields: [syncJobId], references: [id])
 
   exportJobId String?
   exportJob   ExportJob? @relation(fields: [exportJobId], references: [id])
@@ -363,4 +342,94 @@ model MigrationRunV2 {
   ddlPreview      String?
 
   createdAt       DateTime       @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-engine CDC sync (Phase 4)
+//
+// CdcSyncJob is a long-running, resumable, source→dest continuous replica.
+// Distinct from the legacy SyncJob (scheduled full re-copy, Mongo only) and
+// from MigrationJobV2 (one-shot bounded copy). The worker holds a single
+// BullMQ "active" job per CdcSyncJob row for as long as `enabled` is true,
+// and persists `cursor` after every applied batch so a worker crash resumes
+// near the last successful event.
+//
+// `cursor` shape is engine-specific and opaque to everything except the
+// matching CdcSource adapter:
+//   - Mongo:    { tokens: { "<db>.<coll>": <resumeToken> } }
+//   - Postgres: { lsn: "<LSN>", slot: "<slot_name>" }
+//   - MySQL:    { file: "mysql-bin.000123", pos: 4242, gtid?: "…" }
+// ─────────────────────────────────────────────────────────────────────────────
+
+model CdcSyncJob {
+  id                String     @id @default(cuid())
+  name              String
+  profileId         String
+  profile           Profile    @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  sourceConnId      String
+  source            Connection @relation("CdcSyncSource", fields: [sourceConnId], references: [id], onDelete: Cascade)
+  destConnId        String
+  destination       Connection @relation("CdcSyncDest",   fields: [destConnId],   references: [id], onDelete: Cascade)
+
+  // Cached engine types so the worker can route without joining.
+  sourceType        String     // "mongodb" | "postgres" | "mysql"
+  destType          String
+
+  sourceDatabase    String?
+  destDatabase      String?
+
+  // Subset of namespaces to replicate. Shape: [{ database, name }, ...]
+  // Empty/null = all non-system namespaces.
+  namespaces        Json?
+
+  // Reused from MigrationJobV2 — same shape so existing UI can edit it.
+  schemaMapping     Json?
+  typeMappingRules  Json?
+
+  // Bootstrap mode for first start:
+  //   "snapshot" — full Migrate-style copy, then tail from pre-snapshot cursor
+  //   "tail"     — assume dest is populated; tail from "now"
+  bootstrap         String     @default("snapshot")
+
+  // Engine-specific resume position. Opaque JSON owned by the matching adapter.
+  cursor            Json?
+
+  // queued | bootstrapping | tailing | paused | failed
+  status            String     @default("queued")
+  lastEventAt       DateTime?
+  lastError         String?
+  /// Set true to ask the worker to pause at the next safe checkpoint.
+  pauseRequested    Boolean    @default(false)
+  enabled           Boolean    @default(true)
+
+  createdBy         String
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  runs              CdcSyncRun[]
+}
+
+model CdcSyncRun {
+  id              String     @id @default(cuid())
+  jobId           String
+  job             CdcSyncJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  profileId       String
+
+  /// bootstrapping | tailing | paused | failed | stopped
+  phase           String     @default("bootstrapping")
+
+  startedAt       DateTime   @default(now())
+  finishedAt      DateTime?
+
+  // Rolling counts for THIS run (resets each time the worker restarts).
+  inserts         Int        @default(0)
+  updates         Int        @default(0)
+  deletes         Int        @default(0)
+  errorsCount     Int        @default(0)
+
+  /// Optional last error message captured during this run.
+  lastError       String?
+  /// Per-namespace last-known cursor when the run ended (for debugging).
+  endCursor       Json?
 }

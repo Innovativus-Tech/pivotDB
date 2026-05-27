@@ -136,7 +136,12 @@ export async function deleteConnection(id: string, actor: string, scope: Record<
   const existing = await prisma.connection.findFirst({ where: { id, ...scope } });
   if (!existing) throw new Error('Not found');
   await prisma.$transaction(async (tx) => {
-    await tx.syncJob.updateMany({ where: { OR: [{ sourceConnId: id }, { destConnId: id }] }, data: { enabled: false } });
+    // Pause any continuous CDC syncs that reference this connection, so the
+    // worker stops trying to read/write to the now-deleted endpoint.
+    await tx.cdcSyncJob.updateMany({
+      where: { OR: [{ sourceConnId: id }, { destConnId: id }] },
+      data: { enabled: false, pauseRequested: true },
+    });
     await tx.backupJob.updateMany({ where: { connectionId: id }, data: { status: 'paused' } });
     await tx.auditEvent.create({
       data: { actor, action: 'delete_connection', target: `connection:${id}` },
