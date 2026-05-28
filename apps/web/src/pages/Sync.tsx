@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, Play, Pause, Trash2, AlertTriangle, CheckCircle2,
-  Loader2, RefreshCw, Database, Zap, Info,
+  Loader2, RefreshCw, Zap, Info,
 } from 'lucide-react'
 import {
   api,
@@ -11,6 +11,7 @@ import {
   type CreateCdcSyncBody,
 } from '../lib/api'
 import { formatDate } from '../lib/utils'
+import { EngineBadge } from '../components/shared/EngineBadge'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sync page — Phase 4E
@@ -417,12 +418,11 @@ function SyncCard({
             )}
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Database className="h-3.5 w-3.5" />
+            <EngineBadge engine={job.sourceType} variant="icon" />
             <span>{job.source?.name ?? job.sourceType}</span>
-            <span className="text-[10px] uppercase">({job.sourceType})</span>
             <ArrowRight className="h-3 w-3" />
+            <EngineBadge engine={job.destType} variant="icon" />
             <span>{job.destination?.name ?? job.destType}</span>
-            <span className="text-[10px] uppercase">({job.destType})</span>
           </div>
         </div>
         <div className="flex items-center gap-1">

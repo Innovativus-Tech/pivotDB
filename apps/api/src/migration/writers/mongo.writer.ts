@@ -22,6 +22,9 @@ import type {
  */
 export class MongoWriter implements NamespaceWriter {
   private client: MongoClient | null = null;
+  // Most recent insertMany error per namespace (non-duplicate-key). Used by
+  // the migration pipeline to surface root causes on partial runs.
+  private lastErrorByNs = new Map<string, string>();
 
   constructor(
     private readonly uri: string,
@@ -110,8 +113,9 @@ export class MongoWriter implements NamespaceWriter {
       // and .writeErrors[] enumerating per-row failures.
       const e = err as {
         code?: number;
+        message?: string;
         result?: { insertedCount?: number };
-        writeErrors?: Array<{ code: number }>;
+        writeErrors?: Array<{ code: number; errmsg?: string }>;
       };
       const inserted = e.result?.insertedCount ?? 0;
       const writeErrs = e.writeErrors ?? [];
@@ -121,12 +125,33 @@ export class MongoWriter implements NamespaceWriter {
       // Re-throw if we got an error that isn't bulk-write-related at all.
       if (writeErrs.length === 0 && e.code !== 11000) throw err;
 
+      // Capture the first non-duplicate error message for surfacing.
+      // Duplicate-key (code 11000) is normal during retries and not worth
+      // showing as a "failure cause".
+      if (realFailed > 0) {
+        const firstReal = writeErrs.find((w) => w.code !== 11000);
+        if (firstReal?.errmsg) {
+          this.lastErrorByNs.set(this.nsKey(ns), firstReal.errmsg);
+        } else if (e.message) {
+          this.lastErrorByNs.set(this.nsKey(ns), e.message);
+        }
+      }
+
       return {
         written: inserted,
         skipped: dupSkipped,
         failed: realFailed,
       };
     }
+  }
+
+  private nsKey(ns: NamespaceRef): string {
+    return `${ns.database}.${ns.name}`;
+  }
+
+  /** Last bulk-write error captured for a namespace. */
+  getLastError(ns: NamespaceRef): string | undefined {
+    return this.lastErrorByNs.get(this.nsKey(ns));
   }
 
   async finalize(_ns: NamespaceRef): Promise<void> {

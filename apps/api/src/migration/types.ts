@@ -155,6 +155,14 @@ export interface NamespaceWriter {
    * an event after a crash before its cursor was persisted.
    */
   applyChange?(event: ChangeEvent): Promise<void>;
+
+  /**
+   * Return the most recent row-level error captured for a namespace, if any.
+   * Used by the pipeline to surface root causes when writeBatch returns
+   * `failed > 0` without throwing. Optional — writers that throw on every
+   * error don't need to implement it.
+   */
+  getLastError?(ns: NamespaceRef): string | undefined;
 }
 
 export interface WriteResult {

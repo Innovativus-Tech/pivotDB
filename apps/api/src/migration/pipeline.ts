@@ -69,6 +69,8 @@ export async function runMigration(
   const workers: Promise<void>[] = [];
 
   const runOne = async (ns: NamespaceRef) => {
+    const writtenBefore = summary.totalWritten;
+    const failedBefore  = summary.totalFailed;
     try {
       await migrateNamespace(ns, reader, writer, makeMapper, {
         sampleSize, batchSize,
@@ -78,7 +80,30 @@ export async function runMigration(
         },
         dryRun: opts.dryRun ?? false,
       }, summary);
-      summary.succeeded++;
+
+      // Detect *silent* row-level failures — when the writer returned
+      // `failed > 0` from one or more batches but the namespace didn't
+      // throw. Without this, a run that lost 1800/4810 rows would still
+      // be counted as fully succeeded and badged "succeeded" in the UI.
+      const rowsFailed = summary.totalFailed - failedBefore;
+      const rowsWritten = summary.totalWritten - writtenBefore;
+      if (rowsFailed > 0) {
+        // Pull root-cause message from the writer if it captured one.
+        const writerErr = writer.getLastError?.(ns);
+        summary.errors.push({
+          namespace: ns,
+          error: writerErr
+            ? `${rowsFailed} row(s) failed: ${writerErr}`
+            : `${rowsFailed} row(s) failed (no writer error captured)`,
+        });
+        // Count the namespace as failed only if NO rows landed; otherwise
+        // it's a partial — succeeded counter still tracks "namespaces that
+        // finished without throwing" which is the useful UI signal.
+        if (rowsWritten === 0) summary.failed++;
+        else                   summary.succeeded++;
+      } else {
+        summary.succeeded++;
+      }
     } catch (err) {
       summary.failed++;
       summary.errors.push({ namespace: ns, error: String(err) });

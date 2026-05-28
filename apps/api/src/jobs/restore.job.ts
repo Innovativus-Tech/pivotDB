@@ -170,12 +170,37 @@ async function runEngineRestore(
 async function runMongoRestore(uri: string, dumpDir: string): Promise<string> {
   // NOTE: --preserveUUID intentionally omitted (needs applyOps, blocked on Atlas).
   // NOTE: --tlsInsecure intentionally omitted (breaks SNI on Atlas LB).
-  const args = ['--uri', uri, '--dir', dumpDir, '--gzip', '--drop'];
+  //
+  // ⚠️ Strip any default-database path from the URI. If the URI is
+  // `mongodb://user:pass@host/testdb?authSource=admin`, mongorestore treats
+  // `/testdb` as "I want to restore INTO a single database called testdb",
+  // and then refuses to honour --dir's multi-db dump layout — it logs
+  // "don't know what to do with subdirectory `dump/<db>`, skipping...".
+  // We want mongorestore to operate on the dump root only, so the connection
+  // string must NOT pin a default database.
+  const cleanUri = stripMongoUriPath(uri);
+  const args = ['--uri', cleanUri, '--dir', dumpDir, '--gzip', '--drop'];
   const { stdout, stderr } = await execFileAsync('mongorestore', args, {
     env: { ...process.env },
     maxBuffer: 50 * 1024 * 1024,
   });
   return [stderr, stdout].filter(Boolean).join('\n') || 'mongorestore completed successfully';
+}
+
+/**
+ * Remove the `/dbname` path component from a Mongo URI, preserving auth,
+ * host(s), options, and the `mongodb+srv://` scheme. Examples:
+ *   mongodb://u:p@host:27017/testdb           → mongodb://u:p@host:27017/
+ *   mongodb://u:p@host/testdb?authSource=admin → mongodb://u:p@host/?authSource=admin
+ *   mongodb+srv://u:p@cluster.x/db?w=majority → mongodb+srv://u:p@cluster.x/?w=majority
+ */
+function stripMongoUriPath(uri: string): string {
+  // mongodb URIs are awkward for Node's URL class with multiple hosts, so do
+  // it by regex. We split into "scheme://authority", "/db", and "?opts".
+  return uri.replace(
+    /^(mongodb(?:\+srv)?:\/\/[^/?]+)(?:\/[^?]*)?(\?.*)?$/,
+    '$1/$2',
+  );
 }
 
 async function runPostgresRestore(uri: string, extractDir: string): Promise<string> {
@@ -211,6 +236,10 @@ async function runMysqlRestore(uri: string, extractDir: string): Promise<string>
   // one, in case the SQL doesn't switch context.
   const args = [
     '-h', host, '-P', port, '-u', user,
+    // Force TCP — see comment in backup.job.ts dumpMysql(). When --host=localhost
+    // the mysql client falls back to a Unix socket (/tmp/mysql.sock) and ignores
+    // -P, which fails when MySQL runs in Docker.
+    '--protocol=TCP',
     '--force', // continue on individual errors so partial restores still log usefully
   ];
   if (targetDb) args.push('--database', targetDb);

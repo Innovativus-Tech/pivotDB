@@ -238,6 +238,11 @@ async function dumpMysql(uri: string, dumpDir: string, databases: string[]): Pro
 
   const args = [
     '-h', host, '-P', port, '-u', user,
+    // Force TCP. Without this, libmysqlclient ignores -P and silently falls
+    // back to a Unix socket whenever the host is "localhost" — which fails
+    // when MySQL runs in Docker because /tmp/mysql.sock doesn't exist on the
+    // host. Forcing TCP makes the connection deterministic across hostnames.
+    '--protocol=TCP',
     '--single-transaction',
     '--routines', '--triggers',
     '--no-tablespaces',

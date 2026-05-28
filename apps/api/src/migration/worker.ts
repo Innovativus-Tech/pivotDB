@@ -165,9 +165,15 @@ async function runMigrationJob(runId: string, io: IOServer): Promise<void> {
     // Final flush.
     await persistProgress();
 
+    // A run is "succeeded" only when EVERY signal is clean:
+    //   • no namespaces threw      (summary.failed === 0)
+    //   • no errors collected      (summary.errors.length === 0)
+    //   • no row-level losses      (summary.totalFailed === 0)
+    // If only some namespaces succeeded → partial. If none → failed.
+    const totalNsRun = summary.succeeded + summary.failed;
     const phase =
-      summary.failed > 0 ? 'partial' :
-      summary.errors.length > 0 ? 'partial' :
+      summary.failed === totalNsRun && totalNsRun > 0 ? 'failed' :
+      (summary.failed > 0 || summary.errors.length > 0 || summary.totalFailed > 0) ? 'partial' :
       'succeeded';
 
     await finalise(runId, phase, {

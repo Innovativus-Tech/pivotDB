@@ -19,6 +19,10 @@ const INSERT_CHUNK = 500; // rows per multi-row INSERT statement
 export class MySqlWriter implements NamespaceWriter {
   private conn: Connection | null = null;
   private columnsByNs = new Map<string, string[]>();
+  // Most recent INSERT error per namespace — surfaced to the migration run
+  // by the pipeline so the UI can show the root-cause MySQL message instead
+  // of just "N failed".
+  private lastErrorByNs = new Map<string, string>();
 
   constructor(
     private readonly uri: string,
@@ -118,6 +122,7 @@ export class MySqlWriter implements NamespaceWriter {
       } catch (err) {
         failed += chunk.length;
         lastError = err as Error;
+        this.lastErrorByNs.set(this.nsKey(ns), lastError.message);
         // Log the first chunk failure per namespace with enough context to
         // diagnose. Avoids spamming logs on huge migrations.
         if (written === 0 && failed === chunk.length) {
@@ -138,6 +143,12 @@ export class MySqlWriter implements NamespaceWriter {
       throw new Error(`All MySQL inserts failed for ${dbName}.${ns.name}: ${lastError.message}`);
     }
     return { written, skipped: 0, failed };
+  }
+
+  /** Last INSERT error captured for a namespace. Consumed by the migration
+   *  pipeline so the UI can show root-cause MySQL messages on partial runs. */
+  getLastError(ns: NamespaceRef): string | undefined {
+    return this.lastErrorByNs.get(this.nsKey(ns));
   }
 
   async finalize(ns: NamespaceRef): Promise<void> {

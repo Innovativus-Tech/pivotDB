@@ -12,6 +12,7 @@ import {
 } from '../lib/api'
 import { useMigrationSocket } from '../hooks/useMigrationSocket'
 import { formatDate } from '../lib/utils'
+import { EngineBadge } from '../components/shared/EngineBadge'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Migrate page — Phase 1D wizard
@@ -270,6 +271,19 @@ function Step1(p: {
             <AlertTriangle className="h-3.5 w-3.5" />
             Source and destination must be different connections.
           </p>
+        )}
+
+        {p.src && p.dst && p.src.id !== p.dst.id && (
+          <div className="mt-3 flex items-center gap-2">
+            <EngineBadge engine={p.src.dbType} />
+            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+            <EngineBadge engine={p.dst.dbType} />
+            {p.src.dbType === p.dst.dbType && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                same engine
+              </span>
+            )}
+          </div>
         )}
 
         <div className="grid grid-cols-2 gap-4 mt-4">
@@ -606,6 +620,14 @@ function Step3({ runId, jobName, onDone }: { runId: string; jobName: string; onD
   const isTerminal = phase === 'succeeded' || phase === 'failed' ||
                      phase === 'cancelled' || phase === 'partial'
 
+  // Tick once a second so elapsed time updates while running; freezes on
+  // terminal so the value sticks at completion.
+  const elapsed = useElapsed(runRow?.startedAt, runRow?.finishedAt)
+  // Crude ETA: project current rows/sec against total namespaces × expected
+  // rows. We only have totalWritten so far + the per-namespace approxCount
+  // sum from progress ticks. Acceptable approximation for a multi-table run.
+  const eta = computeEta(progress, runRow?.totalWritten ?? 0, elapsed)
+
   return (
     <div className="space-y-4">
       <div className="bg-card border border-border rounded-lg p-5">
@@ -614,7 +636,15 @@ function Step3({ runId, jobName, onDone }: { runId: string; jobName: string; onD
             <h2 className="font-semibold">{jobName}</h2>
             <p className="text-xs text-muted-foreground mt-0.5 font-mono">run {runId.slice(0, 12)}…</p>
           </div>
-          <PhaseBadge phase={phase} connected={live.connected} />
+          <div className="flex items-center gap-3">
+            {elapsed !== null && (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {formatDuration(elapsed)}
+                {!isTerminal && eta !== null && eta > 1 && ` · ETA ${formatDuration(eta)}`}
+              </span>
+            )}
+            <PhaseBadge phase={phase} connected={live.connected} />
+          </div>
         </div>
 
         {runRow && (
@@ -809,19 +839,28 @@ function JobsTab() {
               <tr key={j.id} className="border-b border-border/40 hover:bg-secondary/20">
                 <td className="px-4 py-2.5 font-medium">{j.name}</td>
                 <td className="px-4 py-2.5 text-xs">
-                  <span className="font-mono">{j.source?.name ?? '?'}</span>
-                  <span className="text-muted-foreground"> ({j.sourceType})</span>
-                  <ArrowRight className="inline h-3 w-3 mx-1 text-muted-foreground" />
-                  <span className="font-mono">{j.destination?.name ?? '?'}</span>
-                  <span className="text-muted-foreground"> ({j.destType})</span>
+                  <span className="inline-flex items-center gap-1.5 align-middle">
+                    <EngineBadge engine={j.sourceType} variant="icon" />
+                    <span className="font-mono">{j.source?.name ?? '?'}</span>
+                  </span>
+                  <ArrowRight className="inline h-3 w-3 mx-2 text-muted-foreground align-middle" />
+                  <span className="inline-flex items-center gap-1.5 align-middle">
+                    <EngineBadge engine={j.destType} variant="icon" />
+                    <span className="font-mono">{j.destination?.name ?? '?'}</span>
+                  </span>
                 </td>
                 <td className="px-4 py-2.5 text-xs">
                   {lastRun ? (
-                    <span className="flex items-center gap-1.5">
+                    <span className="flex items-center gap-1.5 flex-wrap">
                       <PhaseBadge phase={lastRun.phase} connected />
                       <span className="text-muted-foreground tabular-nums">
                         {lastRun.totalWritten.toLocaleString()} written
                       </span>
+                      {lastRun.totalFailed > 0 && (
+                        <span className="text-destructive tabular-nums">
+                          · {lastRun.totalFailed.toLocaleString()} failed
+                        </span>
+                      )}
                     </span>
                   ) : (
                     <span className="text-muted-foreground">Never run</span>
@@ -856,6 +895,52 @@ function JobsTab() {
 }
 
 // ─── Tiny helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Returns seconds elapsed between startedAt and now (or finishedAt if set).
+ * Re-renders once a second while the run is still active.
+ */
+function useElapsed(startedAt: string | null | undefined, finishedAt: string | null | undefined): number | null {
+  const [, force] = useState(0)
+  useEffect(() => {
+    if (!startedAt || finishedAt) return
+    const id = setInterval(() => force((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [startedAt, finishedAt])
+
+  if (!startedAt) return null
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now()
+  return Math.max(0, Math.floor((end - new Date(startedAt).getTime()) / 1000))
+}
+
+/** "5s", "1m 23s", "1h 4m" */
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
+}
+
+/**
+ * Project remaining seconds based on rows-written / elapsed.
+ * Uses approxTotal from progress ticks when available; otherwise returns null
+ * (we don't know what we don't know — better to show nothing than guess).
+ */
+function computeEta(
+  progress: Record<string, { written: number; approxTotal?: number; failed: number; skipped: number }>,
+  totalWritten: number,
+  elapsedSec: number | null,
+): number | null {
+  if (!elapsedSec || elapsedSec < 2 || totalWritten === 0) return null
+  let approxTotal = 0
+  let hasApprox = false
+  for (const p of Object.values(progress)) {
+    if (typeof p.approxTotal === 'number') { approxTotal += p.approxTotal; hasApprox = true }
+  }
+  if (!hasApprox || approxTotal <= totalWritten) return null
+  const rate = totalWritten / elapsedSec
+  if (rate <= 0) return null
+  return Math.floor((approxTotal - totalWritten) / rate)
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
