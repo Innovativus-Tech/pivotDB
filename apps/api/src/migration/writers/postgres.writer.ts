@@ -21,6 +21,13 @@ export class PostgresWriter implements NamespaceWriter {
   private client: Client | null = null;
   // Column order per namespace — populated by init(), consumed by writeBatch().
   private columnsByNs = new Map<string, string[]>();
+  // Tracks whether we've already logged a batch failure for this namespace —
+  // we only print full diagnostics for the FIRST failure per namespace so
+  // huge migrations don't drown the logs.
+  private loggedNs = new Set<string>();
+  // The most recent batch error per namespace. Surfaced to the migration run
+  // so the UI can show "why did 1000 rows fail?" instead of just a count.
+  private lastErrorByNs = new Map<string, string>();
 
   constructor(
     private readonly uri: string,
@@ -97,10 +104,35 @@ export class PostgresWriter implements NamespaceWriter {
       return { written: batch.length, skipped: 0, failed: 0 };
     } catch (err) {
       // COPY is all-or-nothing per batch — if it fails, every row in this
-      // batch is rejected. Report as failed and let the pipeline decide
-      // whether to retry, halve the batch, or abort.
+      // batch is rejected. Capture the error so the pipeline + UI can show
+      // *why* the rows failed, instead of just "0 written, 1000 failed".
+      const e = err as { message?: string; code?: string; detail?: string; column?: string; where?: string };
+      const msg = e.message ?? String(err);
+      this.lastErrorByNs.set(this.nsKey(ns), msg);
+
+      // Log full diagnostics only for the first failure per namespace — huge
+      // migrations otherwise spam thousands of identical errors.
+      if (!this.loggedNs.has(this.nsKey(ns))) {
+        this.loggedNs.add(this.nsKey(ns));
+        console.error(
+          `[postgres-writer] COPY into ${qualified} failed: ${msg}` +
+          (e.code   ? `\n  pg code:    ${e.code}`   : '') +
+          (e.detail ? `\n  pg detail:  ${e.detail}` : '') +
+          (e.column ? `\n  pg column:  ${e.column}` : '') +
+          (e.where  ? `\n  pg where:   ${e.where}`  : '') +
+          `\n  declared cols:  [${columns.join(', ')}]` +
+          `\n  sample row keys:[${Object.keys(batch[0]).join(', ')}]` +
+          `\n  sample row:     ${JSON.stringify(batch[0]).slice(0, 800)}`,
+        );
+      }
       return { written: 0, skipped: 0, failed: batch.length };
     }
+  }
+
+  /** Returns the last COPY error seen for a namespace, if any. Used by the
+   *  migration worker to surface root-cause messages on the run record. */
+  getLastError(ns: NamespaceRef): string | undefined {
+    return this.lastErrorByNs.get(this.nsKey(ns));
   }
 
   /**
@@ -213,13 +245,35 @@ function pgVal(v: unknown): unknown {
 
 function encodeField(v: unknown): string {
   if (v === null || v === undefined) return '\\N';
-  // Buffers are written as Postgres bytea hex literal: \xDEADBEEF
-  if (Buffer.isBuffer(v)) return '\\\\x' + v.toString('hex');
-  const s = typeof v === 'string' ? v : String(v);
-  // Escape COPY's metacharacters. Order matters: backslash first.
+
+  // Buffers → Postgres bytea hex literal: \xDEADBEEF
+  if (Buffer.isBuffer(v)) return escapeCopyText('\\\\x' + v.toString('hex'));
+
+  // Date objects → ISO timestamp string (Postgres parses ISO-8601 cleanly).
+  if (v instanceof Date) return escapeCopyText(v.toISOString());
+
+  // Arrays AND plain objects → JSON.stringify.
+  //
+  // The DDL generator currently widens both "array" and "object" canonical
+  // types to JSONB on the Postgres side (see ddl/postgres-ddl.ts) — it
+  // never creates native `text[]` columns. So the safe encoding here is
+  // JSON, regardless of whether the source value was a JS array or an
+  // object. If we ever start preserving native PG array types we'll need
+  // to thread per-column type info through to this function.
+  // typeof null === 'object' but null was already handled above.
+  if (Array.isArray(v) || typeof v === 'object') {
+    return escapeCopyText(JSON.stringify(v));
+  }
+
+  return escapeCopyText(typeof v === 'string' ? v : String(v));
+}
+
+/** Apply COPY text-format metacharacter escaping. Order matters: backslash first. */
+function escapeCopyText(s: string): string {
   return s
     .replace(/\\/g, '\\\\')
     .replace(/\t/g, '\\t')
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '\\r');
 }
+

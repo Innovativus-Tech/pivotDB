@@ -84,9 +84,16 @@ export async function sampleMongoCollection(
     columns.push({
       name,
       type: resolved,
-      // Nullable if any sampled doc was missing the field, OR if the only
-      // observed value was null.
-      nullable: info.presence < docCount || resolved === 'null',
+      // Nullable if ANY of:
+      //   • some sampled docs were missing the field entirely (presence < docCount)
+      //   • the only observed value was null (resolved === 'null')
+      //   • the field was sometimes present-but-null (observedTypes includes 'null')
+      // The third case used to be missed, which produced NOT NULL columns that
+      // then rejected nulls during the full streamed load — the classic
+      // "0 written / N failed" symptom on collections with sparse-value fields.
+      nullable: info.presence < docCount
+              || resolved === 'null'
+              || observedTypes.includes('null'),
       primaryKey: name === '_id',
       presenceCount: info.presence,
       observedTypes: nonNullTypes.length > 1 ? nonNullTypes : undefined,

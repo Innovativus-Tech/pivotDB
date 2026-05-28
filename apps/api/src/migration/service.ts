@@ -14,6 +14,7 @@ import { MongoToMysqlMapper } from './mappers/mongo-to-mysql.mapper.js';
 import { MysqlToMongoMapper } from './mappers/mysql-to-mongo.mapper.js';
 import { PostgresToMysqlMapper } from './mappers/postgres-to-mysql.mapper.js';
 import { MysqlToPostgresMapper } from './mappers/mysql-to-postgres.mapper.js';
+import { IdentityMapper } from './mappers/identity.mapper.js';
 import type { NamespaceReader, NamespaceWriter, RecordMapper, InferredSchema } from './types.js';
 
 /**
@@ -150,10 +151,56 @@ export function buildPlanForPair(input: PairInputs): MigrationPlan {
         sourceDatabase: sourceDb,
       };
     }
+
+    // ─── Same-engine pairs ───────────────────────────────────────────────────
+    // The reader and writer are matching engines, so the schema needs no
+    // translation — IdentityMapper passes records through unchanged. These
+    // pairs are equivalent in scope to the legacy mongodump-based flow but
+    // streamed and resumable like the cross-engine ones.
+
+    case 'mongodb→mongodb': {
+      const sourceDb = sourceDbRaw ?? '';
+      if (!sourceDb) throw new Error('sourceDatabase required for mongodb → mongodb');
+      return {
+        reader: new MongoReader(sourceUri),
+        writer: new MongoWriter(destUri, {
+          dropExisting: dropExisting,
+          databaseOverride: destDbRaw ?? undefined,
+        }),
+        makeMapper: (schema) => new IdentityMapper(schema),
+        sourceDatabase: sourceDb,
+      };
+    }
+    case 'postgres→postgres': {
+      const sourceDb = sourceDbRaw ?? 'public';
+      return {
+        reader: new PostgresReader(sourceUri, { schemaName: sourceDb }),
+        writer: new PostgresWriter(destUri, {
+          schemaName: destDbRaw ?? sourceDb,
+          dropExisting: dropExisting,
+        }),
+        makeMapper: (schema) => new IdentityMapper(schema),
+        sourceDatabase: sourceDb,
+      };
+    }
+    case 'mysql→mysql': {
+      const sourceDb = sourceDbRaw ?? '';
+      if (!sourceDb) throw new Error('sourceDatabase required for mysql → mysql');
+      return {
+        reader: new MySqlReader(sourceUri, { dbName: sourceDb }),
+        writer: new MySqlWriter(destUri, {
+          dbName: destDbRaw ?? sourceDb,
+          dropExisting: dropExisting,
+        }),
+        makeMapper: (schema) => new IdentityMapper(schema),
+        sourceDatabase: sourceDb,
+      };
+    }
+
     default:
       throw new Error(
         `Migration direction "${key}" is not yet supported. ` +
-        `Supported: mongodb↔postgres, mongodb↔mysql, postgres↔mysql.`,
+        `Supported: all 9 pairs across mongodb / postgres / mysql.`,
       );
   }
 }

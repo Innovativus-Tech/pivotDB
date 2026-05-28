@@ -85,36 +85,41 @@ function WizardTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcId, dstId])
 
-  // Sensible default destDatabase per destination engine.
-  //   • Mongo  — match the source DB name so the structure is preserved.
-  //   • PG     — public is always the default schema.
-  //   • MySQL  — match the source name. If the migration user lacks
-  //              CREATE DATABASE privilege the writer will surface a clear
-  //              error pointing the user back here.
+  // Sensible default destDatabase per *pair*, not just per destination.
+  //
+  // Auto-populating from source only makes sense when the two engines treat
+  // the field as the same concept:
+  //   • mongo  → mongo / mysql            ("database" maps cleanly)
+  //   • mysql  → mongo / mysql            (likewise)
+  //   • mysql  → postgres                 (use source db as PG schema name)
+  //   • postgres → postgres               (source schema → dest schema)
+  //   • postgres → *anything*             leave BLANK — PG "public" schema isn't
+  //                                       a useful Mongo/MySQL database name.
+  //   • mongo  → postgres                 default to "public" schema.
   useEffect(() => {
-    if (dst?.dbType === 'mongodb' && sourceDatabase && !destDatabase) {
-      setDestDatabase(sourceDatabase)
-    } else if (dst?.dbType === 'postgres' && !destDatabase) {
-      setDestDatabase('public')
-    } else if (dst?.dbType === 'mysql' && sourceDatabase && !destDatabase) {
+    if (destDatabase) return                       // user already typed something
+    if (!dst?.dbType) return
+    if (!sourceDatabase && dst.dbType !== 'postgres') return
+
+    const srcType = src?.dbType
+    // For the postgres-source case we deliberately do NOT auto-fill the
+    // dest unless the dest is also postgres; the source's "public" schema
+    // is rarely a useful Mongo / MySQL database name.
+    if (srcType === 'postgres' && dst.dbType !== 'postgres') return
+
+    if (dst.dbType === 'postgres') {
+      setDestDatabase(srcType === 'postgres' ? sourceDatabase : 'public')
+    } else {
+      // mongo or mysql destination — mirror the source DB name.
       setDestDatabase(sourceDatabase)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceDatabase, dstId])
 
-  // Supported directions: mongodb↔postgres (Phase 1), mongodb↔mysql (Phase 2),
-  // postgres↔mysql (Phase 3). Same-engine pairs use Move/Sync instead.
-  const supportedPair = !!(src && dst && src.id !== dst.id && (() => {
-    const s = src.dbType, d = dst.dbType
-    return (
-      (s === 'mongodb'  && d === 'postgres') ||
-      (s === 'postgres' && d === 'mongodb')  ||
-      (s === 'mongodb'  && d === 'mysql')    ||
-      (s === 'mysql'    && d === 'mongodb')  ||
-      (s === 'postgres' && d === 'mysql')    ||
-      (s === 'mysql'    && d === 'postgres')
-    )
-  })())
+  // All 9 pairs are supported (3 engines × 3 engines). Same-engine pairs
+  // use IdentityMapper; cross-engine pairs use the dedicated mapper for
+  // that direction. The only "unsupported" case is missing connections.
+  const supportedPair = !!(src && dst && src.id !== dst.id)
 
   const previewMutation = useMutation({
     mutationFn: () => api.post<PreviewResponse>('/api/migration-v2/preview', {
@@ -260,11 +265,10 @@ function Step1(p: {
             connections={p.connections.filter(c => c.id !== p.srcId)} onChange={p.setDstId} />
         </div>
 
-        {p.src && p.dst && p.src.id !== p.dst.id && !p.supportedPair && (
+        {p.src && p.dst && p.src.id === p.dst.id && (
           <p className="mt-3 text-xs text-amber-500 flex items-center gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Direction <b className="mx-1">{p.src.dbType} → {p.dst.dbType}</b> isn't supported yet.
-            Supported: <b className="mx-1">mongodb ↔ postgres</b>, <b className="mx-1">mongodb ↔ mysql</b>, and <b className="mx-1">postgres ↔ mysql</b>.
+            Source and destination must be different connections.
           </p>
         )}
 
