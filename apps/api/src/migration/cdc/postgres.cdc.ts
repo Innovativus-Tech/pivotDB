@@ -160,6 +160,20 @@ export class PostgresCdcSource implements CdcSource {
   async *stream(opts: { startCursor?: unknown }): AsyncIterable<ChangeEvent> {
     // Make sure provisioning is done before subscribing.
     await this.captureStartCursor();
+    console.error(`[cdc-postgres] provisioned slot=${this.slotName} publication=${this.publicationName} schema=${this.schemaName}`);
+
+    // Sanity-check the publication actually has tables. CREATE PUBLICATION
+    // FOR TABLES IN SCHEMA on PG <15 silently produces an empty publication
+    // sometimes; we'd then "tail" forever without seeing a single event.
+    try {
+      const pubTables = await this.adminQuery<{ schemaname: string; tablename: string }>(
+        `SELECT schemaname, tablename FROM pg_publication_tables WHERE pubname = $1`,
+        [this.publicationName],
+      );
+      console.error(`[cdc-postgres] publication "${this.publicationName}" covers ${pubTables.length} table(s): ${pubTables.map((r) => `${r.schemaname}.${r.tablename}`).join(', ') || '(none — events will never fire!)'}`);
+    } catch (err) {
+      console.error(`[cdc-postgres] failed to inspect publication tables:`, (err as Error).message);
+    }
 
     const startCursor = opts.startCursor as { lsn?: string } | undefined;
 
@@ -200,7 +214,14 @@ export class PostgresCdcSource implements CdcSource {
       return new Set(this.opts.namespaces.map((n) => `${this.schemaName}.${n.name}`));
     })();
 
+    let eventCounter = 0;
     service.on('data', (lsn: string, msg: Pgoutput.Message) => {
+      eventCounter++;
+      // Log first event of each kind so we can see the stream is alive
+      // without drowning the console at high WAL volume.
+      if (eventCounter <= 20 || eventCounter % 100 === 0) {
+        console.error(`[cdc-postgres] wal lsn=${lsn} tag=${msg.tag}${'relation' in msg && msg.relation ? ` ns=${msg.relation.schema}.${msg.relation.name}` : ''}`);
+      }
       // We only care about row-level events. Transaction boundaries
       // (begin/commit) and relation/type messages are infrastructure.
       if (msg.tag === 'insert' || msg.tag === 'update' || msg.tag === 'delete') {
@@ -244,8 +265,20 @@ export class PostgresCdcSource implements CdcSource {
     });
 
     service.on('error', (err: Error) => {
+      console.error(`[cdc-postgres] service.on('error') fired: ${err.message}`);
       queue.push({ event: null, error: err });
       wake();
+    });
+    // pg-logical-replication emits these lifecycle events too; surfacing
+    // them lets us SEE silent disconnects on cloud free tiers (Neon's compute
+    // auto-suspend, AWS NAT timeouts) that otherwise look like "stream is
+    // tailing but no events are arriving".
+    service.on('start', () => console.error(`[cdc-postgres] replication started`));
+    service.on('heartbeat', (lsn: string, _ts: number, shouldRespond: boolean) => {
+      console.error(`[cdc-postgres] heartbeat lsn=${lsn} respond=${shouldRespond}`);
+    });
+    service.on('acknowledge', (lsn: string) => {
+      console.error(`[cdc-postgres] acknowledged up to lsn=${lsn}`);
     });
 
     // Kick off subscription. `subscribe` resolves when the connection is
@@ -253,10 +286,14 @@ export class PostgresCdcSource implements CdcSource {
     // We pass startCursor.lsn so PG can resume from there (it must be
     // >= slot's restart_lsn or PG will error).
     const startLsn = startCursor?.lsn ?? '0/00000000';
-    service.subscribe(plugin, this.slotName, startLsn).catch((err) => {
-      queue.push({ event: null, error: err as Error });
-      wake();
-    });
+    console.error(`[cdc-postgres] calling subscribe slot=${this.slotName} startLsn=${startLsn}`);
+    service.subscribe(plugin, this.slotName, startLsn)
+      .then(() => console.error(`[cdc-postgres] subscribe() resolved (connection ended naturally)`))
+      .catch((err) => {
+        console.error(`[cdc-postgres] subscribe() rejected: ${(err as Error).message}`);
+        queue.push({ event: null, error: err as Error });
+        wake();
+      });
 
     try {
       while (true) {

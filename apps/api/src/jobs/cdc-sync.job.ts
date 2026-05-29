@@ -90,6 +90,13 @@ export const cdcQueue = new Queue('cdc-sync', { connection: redis });
 /**
  * Enqueue a CDC sync job. Idempotent — if a job with this jobId is already
  * active or waiting, nothing is added (deduplication via jobId as BullMQ id).
+ *
+ * Retry policy: CDC streams die for legitimate transient reasons (idle TLS
+ * drops on Neon/Supabase free tiers, NAT timeouts, brief network blips).
+ * The replication slot is preserved on the server, so reconnecting just
+ * resumes from the last ACKed LSN — no data lost. We let BullMQ retry up
+ * to 1000 times with exponential backoff (5s → 5min cap). Functionally
+ * infinite for the lifetime of a sync; the user pauses/deletes to stop.
  */
 export async function enqueueCdcSync(cdcSyncJobId: string): Promise<void> {
   await cdcQueue.add(
@@ -99,6 +106,8 @@ export async function enqueueCdcSync(cdcSyncJobId: string): Promise<void> {
       jobId: `cdc-${cdcSyncJobId}`,   // deterministic ID → deduplication
       removeOnComplete: false,         // keep for audit
       removeOnFail: false,
+      attempts: 1000,
+      backoff: { type: 'exponential', delay: 5000 },  // 5s, 10s, 20s, ... capped at ~5min
     },
   );
 }
@@ -233,8 +242,11 @@ export function startCdcWorker() {
 
       let inserts = 0, updates = 0, deletes = 0, errors = 0;
 
+      console.error(`[cdc-sync] job=${cdcSyncJobId} entering for-await stream loop (startCursor=${JSON.stringify(startCursor)})`);
+
       try {
         for await (const event of source.stream({ startCursor })) {
+          console.error(`[cdc-sync] job=${cdcSyncJobId} got event op=${event.op} ns=${event.ns.database}.${event.ns.name}`);
           // Check pause/disable between events (cooperative cancellation).
           const fresh = await prisma.cdcSyncJob.findUnique({
             where: { id: cdcSyncJobId },
@@ -323,8 +335,26 @@ export function startCdcWorker() {
     },
   );
 
-  worker.on('failed', (job, err) => {
-    console.error(`[CdcWorker] Job ${job?.id} failed:`, err.message);
+  worker.on('failed', async (job, err) => {
+    const attemptsMade = job?.attemptsMade ?? 0;
+    const maxAttempts = job?.opts?.attempts ?? 1;
+    const willRetry = attemptsMade < maxAttempts;
+    console.error(`[CdcWorker] Job ${job?.id} attempt ${attemptsMade}/${maxAttempts} failed: ${err.message}${willRetry ? ' — will retry' : ' — giving up'}`);
+
+    // Persist the transient error so the UI surfaces it — but keep status as
+    // "tailing" while retries remain. Only flip to "failed" when BullMQ
+    // exhausts attempts. The reconnect after backoff will resume from the
+    // server-side slot, so no events are lost.
+    const cdcSyncJobId = (job?.data as { cdcSyncJobId?: string } | undefined)?.cdcSyncJobId;
+    if (cdcSyncJobId) {
+      await prisma.cdcSyncJob.update({
+        where: { id: cdcSyncJobId },
+        data: {
+          status: willRetry ? 'tailing' : 'failed',
+          lastError: err.message,
+        },
+      }).catch((e) => console.error('[CdcWorker] failed to persist error:', e));
+    }
   });
 
   return worker;
