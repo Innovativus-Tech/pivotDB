@@ -62,6 +62,14 @@ export interface InferredColumn {
   presenceCount?: number;
   /** For mongo→SQL inference: distinct types seen if the field was mixed. */
   observedTypes?: CanonicalType[];
+  /**
+   * Source column is an auto-incrementing identity:
+   *   MySQL: information_schema.COLUMNS.EXTRA = 'auto_increment'
+   *   Postgres: is_identity='YES' or default begins with 'nextval(' (SERIAL)
+   * SQL destinations emit the dialect-appropriate identity clause; Mongo dests
+   * ignore it. Mongo sources never set this (Mongo _id is app-managed).
+   */
+  autoIncrement?: boolean;
 }
 
 /** A coercion or compatibility note that the user should see before running. */

@@ -64,6 +64,7 @@ export class MySqlReader implements NamespaceReader {
          c.column_type,
          c.is_nullable,
          c.column_key,
+         c.extra,
          (
            SELECT CONCAT(kcu.referenced_table_schema,'.',kcu.referenced_table_name,'.',kcu.referenced_column_name)
            FROM information_schema.key_column_usage kcu
@@ -104,6 +105,8 @@ export class MySqlReader implements NamespaceReader {
 
       const isPk = String(r.column_key ?? r.COLUMN_KEY) === 'PRI';
       if (isPk) pkCols.push(String(r.column_name));
+      const extra = String(r.extra ?? r.EXTRA ?? '').toLowerCase();
+      const autoIncrement = extra.includes('auto_increment') || undefined;
 
       return {
         name: String(r.column_name ?? r.COLUMN_NAME),
@@ -111,6 +114,7 @@ export class MySqlReader implements NamespaceReader {
         nullable: String(r.is_nullable ?? r.IS_NULLABLE) === 'YES',
         primaryKey: isPk || undefined,
         references: (r.fk_target ?? r.FK_TARGET) ? String(r.fk_target ?? r.FK_TARGET) : undefined,
+        autoIncrement,
       };
     });
 

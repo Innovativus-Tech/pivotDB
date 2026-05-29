@@ -36,7 +36,13 @@ export function buildMysqlCreateTable(
 
     const sqlType   = canonicalToMysqlType(col.type);
     const nullClause = col.nullable ? '' : ' NOT NULL';
-    colDefs.push('  `' + cname + '` ' + sqlType + nullClause);
+    // MySQL requires AUTO_INCREMENT on an integer-typed key column. Only emit
+    // when the source actually flagged it; Mongo sources never do.
+    const aiClause =
+      col.autoIncrement && (col.type === 'int' || col.type === 'long')
+        ? ' AUTO_INCREMENT'
+        : '';
+    colDefs.push('  `' + cname + '` ' + sqlType + nullClause + aiClause);
 
     if (col.primaryKey) pkCols.push('`' + cname + '`');
   }

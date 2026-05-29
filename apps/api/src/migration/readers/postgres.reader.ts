@@ -78,12 +78,16 @@ export class PostgresReader implements NamespaceReader {
       is_nullable: 'YES' | 'NO';
       is_pk: boolean;
       fk_target: string | null;
+      is_identity: 'YES' | 'NO' | null;
+      column_default: string | null;
     }>(
       `SELECT
          c.column_name,
          c.udt_name,
          c.data_type,
          c.is_nullable,
+         c.is_identity,
+         c.column_default,
          (
            EXISTS (
              SELECT 1 FROM information_schema.table_constraints tc
@@ -125,12 +129,15 @@ export class PostgresReader implements NamespaceReader {
           message: warn,
         });
       }
+      const isIdentity = r.is_identity === 'YES';
+      const isSerial = !!r.column_default && /^nextval\(/i.test(r.column_default);
       return {
         name: r.column_name,
         type: canonical,
         nullable: r.is_nullable === 'YES',
         primaryKey: r.is_pk || undefined,
         references: r.fk_target ?? undefined,
+        autoIncrement: (isIdentity || isSerial) || undefined,
       };
     });
 

@@ -19,6 +19,10 @@ const INSERT_CHUNK = 500; // rows per multi-row INSERT statement
 export class MySqlWriter implements NamespaceWriter {
   private conn: Connection | null = null;
   private columnsByNs = new Map<string, string[]>();
+  // Identity (AUTO_INCREMENT) columns per ns, for finalize() resync. MySQL only
+  // allows one AUTO_INCREMENT column per table, but we store as a list to keep
+  // symmetry with the PG writer.
+  private identityColsByNs = new Map<string, string[]>();
   // Most recent INSERT error per namespace — surfaced to the migration run
   // by the pipeline so the UI can show the root-cause MySQL message instead
   // of just "N failed".
@@ -53,7 +57,14 @@ export class MySqlWriter implements NamespaceWriter {
     const conn = await this.connect();
     const dbName = this.opts.dbName ?? ns.database;
 
-    this.columnsByNs.set(this.nsKey(ns), mysqlColumnList(schema));
+    const cols = mysqlColumnList(schema);
+    this.columnsByNs.set(this.nsKey(ns), cols);
+    this.identityColsByNs.set(
+      this.nsKey(ns),
+      schema.columns
+        .map((c, i) => (c.autoIncrement && (c.type === 'int' || c.type === 'long') ? cols[i] : null))
+        .filter((x): x is string => x !== null),
+    );
 
     const stmts = buildMysqlCreateTable(schema, {
       dbName,
@@ -152,9 +163,30 @@ export class MySqlWriter implements NamespaceWriter {
   }
 
   async finalize(ns: NamespaceRef): Promise<void> {
-    // MySQL doesn't need an explicit ANALYZE — the optimizer uses real-time
-    // stats. We could run ANALYZE TABLE here for large loads, but it's optional.
-    // Skip to keep finalize fast.
+    const conn = await this.connect();
+    const dbName = this.opts.dbName ?? ns.database;
+
+    // After explicit-id bulk load, bump AUTO_INCREMENT past MAX(id) so the
+    // next INSERT that omits the id doesn't collide. MySQL silently floors
+    // the requested value to MAX(id)+1 if it's lower, so this is safe even
+    // when no identity column actually exists.
+    for (const idCol of this.identityColsByNs.get(this.nsKey(ns)) ?? []) {
+      try {
+        const [rows] = await conn.query<mysql.RowDataPacket[]>(
+          'SELECT COALESCE(MAX(`' + idCol + '`), 0) + 1 AS next FROM `' + dbName + '`.`' + ns.name + '`',
+        );
+        const next = Number(rows[0]?.next ?? 1);
+        if (Number.isFinite(next) && next > 0) {
+          await conn.query(
+            'ALTER TABLE `' + dbName + '`.`' + ns.name + '` AUTO_INCREMENT = ' + next,
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[mysql-writer] auto_increment resync failed for ${dbName}.${ns.name}.${idCol}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   /**

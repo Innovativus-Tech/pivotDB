@@ -21,6 +21,10 @@ export class PostgresWriter implements NamespaceWriter {
   private client: Client | null = null;
   // Column order per namespace — populated by init(), consumed by writeBatch().
   private columnsByNs = new Map<string, string[]>();
+  // Identity columns per namespace — used by finalize() to resync the sequence
+  // after a bulk load supplied explicit ids (otherwise the next INSERT without
+  // an id will collide with row 1 and violate the PK).
+  private identityColsByNs = new Map<string, string[]>();
   // Tracks whether we've already logged a batch failure for this namespace —
   // we only print full diagnostics for the FIRST failure per namespace so
   // huge migrations don't drown the logs.
@@ -71,7 +75,14 @@ export class PostgresWriter implements NamespaceWriter {
     const client = await this.connect();
 
     // Cache column order so writeBatch knows what shape to serialise.
-    this.columnsByNs.set(this.nsKey(ns), pgColumnList(schema));
+    const cols = pgColumnList(schema);
+    this.columnsByNs.set(this.nsKey(ns), cols);
+    this.identityColsByNs.set(
+      this.nsKey(ns),
+      schema.columns
+        .map((c, i) => (c.autoIncrement && (c.type === 'int' || c.type === 'long') ? cols[i] : null))
+        .filter((x): x is string => x !== null),
+    );
 
     const stmts = buildCreateTable(schema, {
       schemaName: this.opts.schemaName ?? 'public',
@@ -201,9 +212,30 @@ export class PostgresWriter implements NamespaceWriter {
   async finalize(ns: NamespaceRef): Promise<void> {
     const client = await this.connect();
     const schemaName = this.opts.schemaName ?? 'public';
+    const qualified = `"${schemaName}"."${ns.name}"`;
+
+    // Resync identity sequences. Bulk loads supplied explicit ids, so the
+    // identity counter is still at its initial value (1); without this the
+    // next INSERT that omits the id would collide with row 1.
+    for (const idCol of this.identityColsByNs.get(this.nsKey(ns)) ?? []) {
+      try {
+        const r = await client.query<{ next: string | null }>(
+          `SELECT (COALESCE(MAX("${idCol}"), 0) + 1)::text AS next FROM ${qualified}`,
+        );
+        const next = Number(r.rows[0]?.next ?? 1);
+        if (Number.isFinite(next) && next > 0) {
+          await client.query(`ALTER TABLE ${qualified} ALTER COLUMN "${idCol}" RESTART WITH ${next}`);
+        }
+      } catch (err) {
+        console.error(
+          `[postgres-writer] identity resync failed for ${qualified}.${idCol}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     // Update planner stats — important after a bulk load or query planning
     // will be wildly off for the next few minutes.
-    await client.query(`ANALYZE "${schemaName}"."${ns.name}";`).catch(() => {});
+    await client.query(`ANALYZE ${qualified};`).catch(() => {});
   }
 
   async close(): Promise<void> {
