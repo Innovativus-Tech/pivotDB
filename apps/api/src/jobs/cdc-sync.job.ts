@@ -120,18 +120,24 @@ export function startCdcWorker() {
         return;
       }
 
-      // Create a run record.
+      // "Already tailing" means the snapshot fully completed (or wasn't
+      // required). cursor presence alone isn't enough — it gets persisted
+      // BEFORE the snapshot starts, so a retry mid-snapshot has a cursor
+      // but is still bootstrapping.
+      const alreadyTailing =
+        cdcJob.bootstrap !== 'snapshot' || cdcJob.snapshotState === 'done';
+
       const run = await prisma.cdcSyncRun.create({
         data: {
           jobId: cdcSyncJobId,
           profileId: cdcJob.profileId,
-          phase: cdcJob.cursor ? 'tailing' : 'bootstrapping',
+          phase: alreadyTailing ? 'tailing' : 'bootstrapping',
         },
       });
 
       await prisma.cdcSyncJob.update({
         where: { id: cdcSyncJobId },
-        data: { status: cdcJob.cursor ? 'tailing' : 'bootstrapping' },
+        data: { status: alreadyTailing ? 'tailing' : 'bootstrapping' },
       });
 
       const srcUri = decrypt(cdcJob.source.encryptedUri);
@@ -167,25 +173,27 @@ export function startCdcWorker() {
       //   3. Persist the cursor so a worker crash mid-bootstrap doesn't
       //      re-snapshot on restart.
       let startCursor: unknown = cdcJob.cursor;
+      const needsSnapshot =
+        cdcJob.bootstrap === 'snapshot' && cdcJob.snapshotState !== 'done';
 
-      if (!startCursor && cdcJob.bootstrap === 'snapshot') {
-        const tempSource = sourceFactory({
-          uri: srcUri,
-          database: cdcJob.sourceDatabase ?? undefined,
-          jobId: cdcSyncJobId,
-        });
-        startCursor = await tempSource.captureStartCursor();
-        await tempSource.close();
+      if (needsSnapshot) {
+        // Capture (or reuse) the pre-snapshot cursor. On a retry the cursor is
+        // already saved from the previous attempt — keep it so the tail still
+        // starts BEFORE the original snapshot began (zero-gap guarantee).
+        if (!startCursor) {
+          const tempSource = sourceFactory({
+            uri: srcUri,
+            database: cdcJob.sourceDatabase ?? undefined,
+            jobId: cdcSyncJobId,
+          });
+          startCursor = await tempSource.captureStartCursor();
+          await tempSource.close();
 
-        // Persist the cursor BEFORE running the snapshot so a crash mid-copy
-        // doesn't lose the start point. If the snapshot fails we re-enqueue
-        // and the next attempt picks up at `startCursor` for the tail —
-        // events that landed before the cursor are already in the dest from
-        // the partial snapshot; the writer's upsert path tolerates dupes.
-        await prisma.cdcSyncJob.update({
-          where: { id: cdcSyncJobId },
-          data: { cursor: startCursor as object },
-        });
+          await prisma.cdcSyncJob.update({
+            where: { id: cdcSyncJobId },
+            data: { cursor: startCursor as object },
+          });
+        }
 
         try {
           const plan = buildPlanForPair({
@@ -200,22 +208,38 @@ export function startCdcWorker() {
 
           const nsFilter = (cdcJob.namespaces as Array<{ database: string; name: string }> | null) ?? undefined;
 
-          await runMigration(plan.reader, plan.writer, plan.makeMapper, {
+          const summary = await runMigration(plan.reader, plan.writer, plan.makeMapper, {
             sampleSize: 1000,
             batchSize: 1000,
             parallelism: 1,
             namespaces: nsFilter,
             database: plan.sourceDatabase,
           });
+
+          // runMigration swallows per-namespace errors into summary.errors and
+          // counts partial row failures in totalFailed without throwing. A
+          // bootstrap that lost rows must NOT be marked done — otherwise the
+          // worker would flip to tailing with a destination missing data.
+          if (summary.failed > 0 || summary.totalFailed > 0 || summary.errors.length > 0) {
+            const details = summary.errors
+              .slice(0, 3)
+              .map((e) => `${e.namespace.database}.${e.namespace.name}: ${e.error}`)
+              .join(' | ');
+            throw new Error(
+              `Snapshot incomplete — ${summary.failed} namespace(s) failed, ` +
+              `${summary.totalFailed} row(s) failed${details ? `: ${details}` : ''}`,
+            );
+          }
         } catch (snapErr) {
           const msg = `Snapshot bootstrap failed: ${snapErr instanceof Error ? snapErr.message : String(snapErr)}`;
           await failRun(run.id, cdcSyncJobId, msg);
           throw snapErr;
         }
 
+        // Only NOW is it safe to skip the snapshot block on a future retry.
         await prisma.cdcSyncJob.update({
           where: { id: cdcSyncJobId },
-          data: { status: 'tailing' },
+          data: { snapshotState: 'done', status: 'tailing' },
         });
         await prisma.cdcSyncRun.update({
           where: { id: run.id },
