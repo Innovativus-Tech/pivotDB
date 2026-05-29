@@ -392,6 +392,17 @@ model CdcSyncJob {
   //   "tail"     — assume dest is populated; tail from "now"
   bootstrap         String     @default("snapshot")
 
+  // Tracks whether the initial snapshot copy has fully completed.
+  //   "pending" — startCursor may be saved, but runMigration has not yet
+  //               returned cleanly. Worker must (re-)run the snapshot.
+  //   "done"    — snapshot finished without per-namespace errors; safe to
+  //               skip the bootstrap block and go straight to tailing.
+  // Decoupled from `cursor` because the cursor is persisted BEFORE the
+  // snapshot starts (so the tail picks up gap events) — without this flag a
+  // mid-snapshot crash would look indistinguishable from a completed bootstrap
+  // and we'd silently drop the rest of the copy.
+  snapshotState     String     @default("pending")
+
   // Engine-specific resume position. Opaque JSON owned by the matching adapter.
   cursor            Json?
 
