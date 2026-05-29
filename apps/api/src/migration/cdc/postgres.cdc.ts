@@ -80,6 +80,11 @@ export class PostgresCdcSource implements CdcSource {
       connectionString: this.opts.uri,
       ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
     });
+    // Even short-lived clients can emit 'error' if the socket drops mid-query
+    // — without a listener that becomes an unhandled event and kills Node.
+    client.on('error', (err) => {
+      console.error('[postgres-cdc] background error on adhoc client:', err.message);
+    });
     await client.connect();
     try {
       const res = await client.query<T>(sql, params);

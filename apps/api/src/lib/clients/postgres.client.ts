@@ -38,6 +38,15 @@ export class PostgresDbClient implements DbClient {
         // Lenient SSL by default — managed PGs (Supabase, Neon, RDS) need this.
         ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
       });
+      // ⚠️ pg.Client emits 'error' from background sources (socket drops,
+      // keepalive failures). Without a listener, Node kills the process —
+      // which is what happens on Neon/Supabase free tiers that idle-close
+      // TLS sockets after ~5 min. Drop the cached client so the next call
+      // reconnects transparently.
+      this.client.on('error', (err) => {
+        console.error('[postgres-client] background error, invalidating cached connection:', err.message);
+        this.client = null;
+      });
       await this.client.connect();
     }
     return this.client;

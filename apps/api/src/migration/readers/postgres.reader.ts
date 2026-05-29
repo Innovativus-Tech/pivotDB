@@ -34,6 +34,13 @@ export class PostgresReader implements NamespaceReader {
         connectionTimeoutMillis: 10_000,
         ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
       });
+      // Without this, an idle TLS drop (Neon/Supabase free tiers, NAT
+      // timeouts) crashes the entire API process. Logging + nulling the
+      // cached client makes the next read transparently reconnect.
+      this.client.on('error', (err) => {
+        console.error('[postgres-reader] background error, invalidating cached connection:', err.message);
+        this.client = null;
+      });
       await this.client.connect();
     }
     return this.client;

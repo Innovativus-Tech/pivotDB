@@ -50,6 +50,12 @@ export class PostgresWriter implements NamespaceWriter {
         ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
       };
       this.client = new Client(cfg);
+      // See lib/clients/postgres.client.ts for the rationale — unhandled
+      // 'error' events from background socket activity kill the process.
+      this.client.on('error', (err) => {
+        console.error('[postgres-writer] background error, invalidating cached connection:', err.message);
+        this.client = null;
+      });
       await this.client.connect();
 
       // Disable FK + trigger checks for the duration of this connection.

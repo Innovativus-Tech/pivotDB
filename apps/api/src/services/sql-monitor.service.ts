@@ -95,6 +95,11 @@ async function getPostgresSnapshot(uri: string): Promise<SqlMonitorSnapshot> {
     connectionTimeoutMillis: 5000,
     ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
   });
+  // Cloud free tiers (Neon, Supabase) idle-close TLS sockets. Without this
+  // listener the resulting 'error' event is unhandled and kills the process.
+  client.on('error', (err) => {
+    console.error('[sql-monitor] background error on postgres client:', err.message);
+  });
   await client.connect();
   try {
     // Run independent queries in parallel — they target different
