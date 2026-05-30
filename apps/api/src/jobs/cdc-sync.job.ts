@@ -129,6 +129,22 @@ export function startCdcWorker() {
         return;
       }
 
+      // Honour pauseRequested at the top of every attempt. Without this,
+      // BullMQ's retry-after-Neon-disconnect would silently resume the stream
+      // even though the user clicked Pause — the in-loop check at line ~286
+      // only fires between events, so a stream that's only seeing heartbeats
+      // can never react to pause until Neon drops it and we retry.
+      if (cdcJob.pauseRequested) {
+        console.error(`[cdc-sync] job=${cdcSyncJobId} paused — exiting cleanly without starting stream`);
+        await prisma.cdcSyncJob.update({
+          where: { id: cdcSyncJobId },
+          data: { status: 'paused', pauseRequested: false },
+        });
+        // Returning cleanly (no throw) → BullMQ marks the job completed and
+        // does NOT schedule another retry. Resume re-enqueues fresh.
+        return;
+      }
+
       // "Already tailing" means the snapshot fully completed (or wasn't
       // required). cursor presence alone isn't enough — it gets persisted
       // BEFORE the snapshot starts, so a retry mid-snapshot has a cursor
@@ -268,6 +284,18 @@ export function startCdcWorker() {
 
       console.error(`[cdc-sync] job=${cdcSyncJobId} entering for-await stream loop (startCursor=${JSON.stringify(startCursor)})`);
 
+      // Clear any stale "Connection terminated unexpectedly" banner from a
+      // previous BullMQ attempt. We've successfully made it back to the stream
+      // loop on a fresh attempt — if the new attempt fails too, worker.on('failed')
+      // will re-set lastError immediately. This is the UX fix that keeps the
+      // sync card looking healthy whenever we're actually streaming, even on
+      // cloud providers (Neon free tier) that drop the replication connection
+      // every ~30s and force a reconnect.
+      await prisma.cdcSyncJob.update({
+        where: { id: cdcSyncJobId },
+        data: { lastError: null },
+      }).catch(() => { /* non-fatal — don't break stream startup over a DB write */ });
+
       try {
         for await (const event of source.stream({ startCursor })) {
           console.error(`[cdc-sync] job=${cdcSyncJobId} got event op=${event.op} ns=${event.ns.database}.${event.ns.name}`);
@@ -323,11 +351,15 @@ export function startCdcWorker() {
         await writer.close().catch(() => {});
       }
 
-      // Determine final status.
-      const pausedOrDisabled = !(await prisma.cdcSyncJob.findUnique({
+      // Determine final status. The pause check has to include pauseRequested
+      // because that's the flag the /pause route flips — `enabled` only goes
+      // false on delete. Without this, a user-paused sync would land here with
+      // status='tailing' even though we broke out of the loop for pause.
+      const freshState = await prisma.cdcSyncJob.findUnique({
         where: { id: cdcSyncJobId },
-        select: { enabled: true },
-      }))?.enabled;
+        select: { enabled: true, pauseRequested: true },
+      });
+      const pausedOrDisabled = !freshState?.enabled || !!freshState?.pauseRequested;
 
       const finalStatus = pausedOrDisabled ? 'paused'
         : errors > 0 ? 'failed'

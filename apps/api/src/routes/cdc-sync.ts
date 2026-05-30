@@ -191,6 +191,17 @@ export async function cdcSyncRoutes(app: FastifyInstance) {
       where: { id: req.params.id },
       data: { enabled: true, pauseRequested: false, status: 'queued' },
     });
+
+    // BullMQ uses deterministic job IDs (`cdc-${id}`) for dedup. If a previous
+    // run completed or failed, re-add() silently no-ops. Remove the stale job
+    // first so Resume actually queues a fresh attempt.
+    const oldBJob = await cdcQueue.getJob(`cdc-${job.id}`);
+    if (oldBJob) {
+      const state = await oldBJob.getState();
+      if (state === 'completed' || state === 'failed') {
+        await oldBJob.remove().catch(() => { /* tolerate race */ });
+      }
+    }
     await enqueueCdcSync(job.id);
     return { queued: true };
   });
@@ -210,6 +221,20 @@ export async function cdcSyncRoutes(app: FastifyInstance) {
       where: { id: req.params.id },
       data: { pauseRequested: true },
     });
+
+    // Remove the BullMQ job if it's waiting/delayed — otherwise our 5-30s
+    // exponential backoff would re-fire the worker after the user paused.
+    // For an actively running attempt we can't cancel mid-stream; the worker
+    // will exit on its own when the current Neon connection drops and the
+    // top-of-worker pauseRequested check kicks in on the next pickup.
+    const bJob = await cdcQueue.getJob(`cdc-${req.params.id}`);
+    if (bJob) {
+      const state = await bJob.getState();
+      if (state === 'waiting' || state === 'delayed') {
+        await bJob.remove().catch(() => { /* race with retry — fine */ });
+      }
+    }
+
     return { pausing: true };
   });
 }
