@@ -66,7 +66,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - prometheus-data:/prometheus
+      - prometheus-data-v2:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -110,7 +110,13 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  prometheus-data:
+  # NOTE: renamed from `prometheus-data` to `prometheus-data-v2` to force a
+  # fresh empty TSDB on the next deploy. The previous volume had duplicate
+  # scrape series (api:3001 + host.docker.internal:3001) baked into 30 days
+  # of history, which Grafana was rendering as doubled values in every panel.
+  # The old volume is left orphaned in Docker — safe to delete via the Coolify
+  # Server → Volumes page later if you want to reclaim disk.
+  prometheus-data-v2:
   grafana-data:
   backup-data:
 

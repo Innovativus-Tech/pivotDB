@@ -755,17 +755,35 @@ function WiredTigerGauge({ snapshot }: { snapshot: MonitorSnapshot }) {
 import type { AlertMetric, AlertCondition, AlertRule, AlertEvent } from '../lib/api'
 import { Plus, Pause as PauseIcon, Play as PlayIcon, Edit2, Mail, Webhook, X } from 'lucide-react'
 
-const ALERT_METRICS: Array<{ value: AlertMetric; label: string }> = [
-  { value: 'currentConnections',   label: 'Current Connections' },
-  { value: 'availableConnections', label: 'Available Connections' },
-  { value: 'memResident',          label: 'Resident Memory (MB)' },
-  { value: 'memVirtual',           label: 'Virtual Memory (MB)' },
-  { value: 'opsPerSecTotal',       label: 'Operations/sec (total)' },
-  { value: 'replicationLag',       label: 'Replication Lag (seconds)' },
-  { value: 'wtCachePercent',       label: 'WiredTiger Cache (%)' },
-  { value: 'networkBytesIn',       label: 'Network In (bytes/s)' },
-  { value: 'networkBytesOut',      label: 'Network Out (bytes/s)' },
+// Metric entries are tagged with the engines they make sense for. The alert
+// evaluator returns null for engine-incompatible metrics (e.g. memResident on
+// PG), so rules created with them would silently never fire — better to hide
+// them at creation time.
+type MetricEntry = { value: AlertMetric; label: string; engines: Array<'mongodb' | 'postgres' | 'mysql'> }
+
+const ALL_ALERT_METRICS: MetricEntry[] = [
+  { value: 'currentConnections',   label: 'Current Connections',     engines: ['mongodb', 'postgres', 'mysql'] },
+  { value: 'availableConnections', label: 'Available Connections',   engines: ['mongodb', 'postgres', 'mysql'] },
+  { value: 'memResident',          label: 'Resident Memory (MB)',    engines: ['mongodb'] },
+  { value: 'memVirtual',           label: 'Virtual Memory (MB)',     engines: ['mongodb'] },
+  { value: 'opsPerSecTotal',       label: 'Operations/sec (total)',  engines: ['mongodb', 'postgres', 'mysql'] },
+  { value: 'replicationLag',       label: 'Replication Lag (seconds)', engines: ['mongodb', 'postgres', 'mysql'] },
+  { value: 'wtCachePercent',       label: 'Cache Hit (%)',           engines: ['mongodb', 'postgres', 'mysql'] },
+  { value: 'networkBytesIn',       label: 'Network In (bytes/s)',    engines: ['mongodb'] },
+  { value: 'networkBytesOut',      label: 'Network Out (bytes/s)',   engines: ['mongodb'] },
 ]
+
+// Default Mongo list preserves prior behaviour when consumers don't pass an engine.
+const ALERT_METRICS: Array<{ value: AlertMetric; label: string }> = ALL_ALERT_METRICS.map(
+  ({ value, label }) => ({ value, label }),
+)
+
+function metricsForEngine(engine?: string): Array<{ value: AlertMetric; label: string }> {
+  if (!engine) return ALERT_METRICS
+  return ALL_ALERT_METRICS
+    .filter((m) => m.engines.includes(engine as 'mongodb' | 'postgres' | 'mysql'))
+    .map(({ value, label }) => ({ value, label }))
+}
 
 const CONDITION_OPTIONS: Array<{ value: AlertCondition; label: string }> = [
   { value: 'gt',  label: '> greater than' },
@@ -823,7 +841,7 @@ function ActiveAlertsBanner({ snapshot }: { snapshot: MonitorSnapshot | undefine
 
 // ── 6B: Alert Rules Panel ────────────────────────────────────────────────────
 
-function AlertRulesPanel({ connectionId }: { connectionId: string }) {
+export function AlertRulesPanel({ connectionId, engine }: { connectionId: string; engine?: string }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(true)
   const [editing, setEditing] = useState<AlertRule | null>(null)
@@ -909,14 +927,14 @@ function AlertRulesPanel({ connectionId }: { connectionId: string }) {
       )}
 
       {creating && (
-        <RuleFormModal connectionId={connectionId} onClose={() => setCreating(false)}
+        <RuleFormModal connectionId={connectionId} engine={engine} onClose={() => setCreating(false)}
           onSaved={() => {
             setCreating(false)
             qc.invalidateQueries({ queryKey: ['alert-rules', connectionId] })
           }} />
       )}
       {editing && (
-        <RuleFormModal connectionId={connectionId} editing={editing}
+        <RuleFormModal connectionId={connectionId} engine={engine} editing={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null)
@@ -1029,15 +1047,17 @@ function RuleRow({
 // ── 6B: Create / Edit modal ──────────────────────────────────────────────────
 
 function RuleFormModal({
-  connectionId, editing, onClose, onSaved,
+  connectionId, editing, onClose, onSaved, engine,
 }: {
   connectionId: string
   editing?: AlertRule
   onClose: () => void
   onSaved: () => void
+  engine?: string
 }) {
   const [name, setName] = useState(editing?.name ?? '')
   const [metric, setMetric] = useState<AlertMetric>(editing?.metric ?? 'currentConnections')
+  const availableMetrics = metricsForEngine(engine)
   const [condition, setCondition] = useState<AlertCondition>(editing?.condition ?? 'gt')
   const [threshold, setThreshold] = useState<number>(editing?.threshold ?? 100)
   const [durationMinutes, setDurationMinutes] = useState<number>(editing?.durationMinutes ?? 1)
@@ -1083,7 +1103,7 @@ function RuleFormModal({
             <select value={metric} onChange={(e) => setMetric(e.target.value as AlertMetric)}
               disabled={!!editing}
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm disabled:opacity-50">
-              {ALERT_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              {availableMetrics.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
             {editing && <p className="text-[10px] text-muted-foreground mt-0.5">Metric cannot be changed — create a new rule instead.</p>}
           </div>

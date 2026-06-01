@@ -7,6 +7,7 @@ import { api, type Connection, type SqlMonitorSnapshot } from '../../lib/api'
 import { formatBytes } from '../../lib/utils'
 import { GrafanaPanel } from './GrafanaPanel'
 import { Badge, Card, SectionLabel, StatusDot } from '../console/primitives'
+import { AlertRulesPanel } from '../../pages/Monitor'
 
 const POLL_MS = 5000
 
@@ -114,6 +115,10 @@ export function SqlMonitor({ conn, grafanaUrl }: { conn: Connection; grafanaUrl:
 
         {/* Active queries */}
         {data && <ActiveQueriesPanel data={data} />}
+
+        {/* Alert rules — same UX as Mongo monitor. Metric dropdown is
+            filtered to PG/MySQL-applicable options by the panel itself. */}
+        <AlertRulesPanel connectionId={conn.id} engine={conn.dbType} />
       </div>
     </div>
   )
