@@ -3,13 +3,17 @@ FROM node:20-bookworm-slim AS build
 
 WORKDIR /app
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --no-frozen-lockfile --unsafe-perm
+# --shamefully-hoist forces a flat node_modules layout so binaries like
+# `node_modules/prisma/build/index.js` resolve the same way npm would.
+# Without it, pnpm's isolated layout breaks `pnpm run db:generate` because
+# the prisma CLI shim expects a hoisted package.
+RUN pnpm install --no-frozen-lockfile --unsafe-perm --shamefully-hoist
 
 COPY . .
-RUN pnpm run db:generate
+RUN pnpm exec prisma generate
 RUN pnpm exec tsc
 
 # ---- Production stage ----
@@ -76,7 +80,7 @@ RUN apt-get update && \
     default-mysql-client && \
   rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install

@@ -6,10 +6,11 @@ WORKDIR /app
 ARG VITE_GRAFANA_URL
 ENV VITE_GRAFANA_URL=$VITE_GRAFANA_URL
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --no-frozen-lockfile --unsafe-perm
+# --shamefully-hoist forces flat node_modules so binaries resolve like npm
+RUN pnpm install --no-frozen-lockfile --unsafe-perm --shamefully-hoist
 
 COPY . .
 RUN pnpm exec vite build
@@ -54,10 +55,10 @@ FROM node:20-alpine AS development
 
 WORKDIR /app
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install
+RUN pnpm install --shamefully-hoist
 
 COPY . .
 
