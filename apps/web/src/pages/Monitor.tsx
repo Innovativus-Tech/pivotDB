@@ -9,6 +9,7 @@ import {
   type SlowQuery, type DbSize, type CollSize,
 } from '../lib/api'
 import { useConnectionsStore } from '../stores/connections.store'
+import { SqlMonitor } from '../components/monitor/SqlMonitor'
 import { useCurrentOps } from '../hooks/useCurrentOps'
 import { formatBytes } from '../lib/utils'
 import { GrafanaPanel } from '../components/monitor/GrafanaPanel'
@@ -56,6 +57,12 @@ export function MonitorPage() {
         <p className="text-muted-foreground">Select a connection from the Connections page to view monitoring.</p>
       </div>
     )
+  }
+
+  // SQL connections get their own Monitor (Phase 2B). Mongo conns fall through
+  // to MonitorBody which uses serverStatus / currentOp / replSetGetStatus.
+  if (conn.dbType !== 'mongodb') {
+    return <SqlMonitor conn={conn} grafanaUrl={grafanaUrl} />
   }
 
   return <MonitorBody connectionId={activeConnectionId} conn={conn} grafanaUrl={grafanaUrl} />

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { X, TestTube2, Plus } from 'lucide-react'
-import { api, type Connection } from '../../lib/api'
+import { api, type Connection, type DbType } from '../../lib/api'
 
 interface Props {
   open: boolean
@@ -9,22 +9,53 @@ interface Props {
   existing?: Connection
 }
 
+/** Per-engine display copy. Keeps the form a single shape across all engines. */
+const ENGINE_OPTIONS: Array<{
+  value: DbType
+  label: string
+  uriLabel: string
+  uriPlaceholder: string
+  hint?: string
+}> = [
+  {
+    value: 'mongodb',
+    label: 'MongoDB',
+    uriLabel: 'MongoDB URI',
+    uriPlaceholder: 'mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority',
+  },
+  {
+    value: 'postgres',
+    label: 'PostgreSQL',
+    uriLabel: 'Postgres URI',
+    uriPlaceholder: 'postgresql://user:pass@host:5432/database?sslmode=require',
+    hint: 'Use ?sslmode=require for Supabase, Neon, RDS, and most managed Postgres.',
+  },
+  {
+    value: 'mysql',
+    label: 'MySQL',
+    uriLabel: 'MySQL URI',
+    uriPlaceholder: 'mysql://user:pass@host:3306/database',
+  },
+]
+
 export function AddConnectionModal({ open, onClose, existing }: Props) {
   const qc = useQueryClient()
   const isEdit = !!existing
 
+  const [dbType, setDbType]     = useState<DbType>(existing?.dbType ?? 'mongodb')
   const [name, setName]         = useState(existing?.name ?? '')
   const [uri, setUri]           = useState('')
   const [tags, setTags]         = useState(existing?.tags.join(', ') ?? '')
   const [readOnly, setReadOnly] = useState(existing?.readOnly ?? false)
-  const [testResult, setTestResult] = useState<{ latencyMs: number; serverVersion: string; topology: string } | null>(null)
-  const [testError, setTestError] = useState<string | null>(null)
-  const [testing, setTesting] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  const engine = ENGINE_OPTIONS.find((e) => e.value === dbType)!
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; uri: string; tags: string[]; readOnly: boolean }) =>
+    mutationFn: (data: { name: string; dbType: DbType; uri: string; tags: string[]; readOnly: boolean }) =>
       api.post<Connection>('/api/connections', data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['connections'] }); onClose() },
+    onError: (err) => setCreateError(err.message),
   })
 
   const updateMutation = useMutation({
@@ -33,40 +64,20 @@ export function AddConnectionModal({ open, onClose, existing }: Props) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['connections'] }); onClose() },
   })
 
-  const handleTest = async () => {
-    if (!uri) return
-    setTesting(true)
-    setTestError(null)
-    setTestResult(null)
-    try {
-      // Create temp test by posting to a test endpoint directly
-      const result = await api.post<{ latencyMs: number; serverVersion: string; topology: string }>(
-        '/api/connections', { name: '__test__', uri, tags: [], readOnly: false, _testOnly: true }
-      ).catch(async () => {
-        // Fallback: try direct validation
-        throw new Error('Could not reach server')
-      })
-      setTestResult(result)
-    } catch (err) {
-      setTestError(String(err))
-    } finally {
-      setTesting(false)
-    }
-  }
-
   const handleSave = () => {
+    setCreateError(null)
     const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean)
     if (isEdit) {
       updateMutation.mutate({ name, tags: tagList, readOnly })
     } else {
-      createMutation.mutate({ name, uri, tags: tagList, readOnly })
+      createMutation.mutate({ name, dbType, uri, tags: tagList, readOnly })
     }
   }
 
   if (!open) return null
 
   const isPending = createMutation.isPending || updateMutation.isPending
-  const error = createMutation.error || updateMutation.error
+  const error = createError || updateMutation.error?.message
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -78,26 +89,54 @@ export function AddConnectionModal({ open, onClose, existing }: Props) {
         </div>
 
         <div className="space-y-4">
+          {/* Engine type — locked on edit (changing dbType post-creation is destructive) */}
+          {!isEdit && (
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Database Type *</label>
+              <div className="flex gap-2">
+                {ENGINE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setDbType(opt.value)}
+                    className={`flex-1 px-3 py-2 text-sm rounded border transition-colors ${
+                      dbType === opt.value
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'border-border text-muted-foreground hover:border-primary/50'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Friendly Name *</label>
             <input
               className="w-full bg-input border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Production Atlas"
+              placeholder={dbType === 'mongodb' ? 'Production Atlas' : dbType === 'postgres' ? 'Production Postgres' : 'Production MySQL'}
             />
           </div>
 
           {!isEdit && (
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">MongoDB URI *</label>
+              <label className="text-xs text-muted-foreground mb-1 block">{engine.uriLabel} *</label>
               <input
                 className="w-full bg-input border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
                 value={uri}
                 onChange={(e) => setUri(e.target.value)}
-                placeholder="mongodb://user:pass@host:27017/db"
+                placeholder={engine.uriPlaceholder}
                 type="password"
+                spellCheck={false}
+                autoComplete="off"
               />
+              {engine.hint && (
+                <p className="text-xs text-muted-foreground mt-1">{engine.hint}</p>
+              )}
             </div>
           )}
 
@@ -122,26 +161,15 @@ export function AddConnectionModal({ open, onClose, existing }: Props) {
             <label htmlFor="readOnly" className="text-sm text-muted-foreground">Read-only mode</label>
           </div>
 
+          {/* "Test" is folded into Save — the API probes on create and rejects bad URIs. */}
           {!isEdit && (
-            <div>
-              {testResult && (
-                <p className="text-xs text-green-400 mb-2">
-                  Connected: MongoDB v{testResult.serverVersion} · {testResult.topology} · {testResult.latencyMs}ms
-                </p>
-              )}
-              {testError && <p className="text-xs text-red-400 mb-2">{testError}</p>}
-              <button
-                onClick={handleTest}
-                disabled={!uri || testing}
-                className="flex items-center gap-2 text-sm px-3 py-2 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors disabled:opacity-50"
-              >
-                <TestTube2 className="h-3.5 w-3.5" />
-                {testing ? 'Testing…' : 'Test Connection'}
-              </button>
-            </div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <TestTube2 className="h-3 w-3" />
+              Saving will probe the connection — invalid URIs are rejected before the row is created.
+            </p>
           )}
 
-          {error && <p className="text-xs text-red-400">{error.message}</p>}
+          {error && <p className="text-xs text-red-400">{String(error)}</p>}
         </div>
 
         <div className="flex justify-end gap-3 mt-6">

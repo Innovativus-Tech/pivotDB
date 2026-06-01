@@ -44,10 +44,19 @@ export async function login(email: string, password: string) {
 }
 
 // Connection types
+export type DbType = 'mongodb' | 'postgres' | 'mysql'
+
 export interface Connection {
   id: string
   name: string
+  /** Engine type. Defaults to 'mongodb' for rows created before cross-engine support. */
+  dbType: DbType
+  /** Mongo-only: standalone | replicaSet | sharded. "standalone" for SQL. */
   topology: string
+  /** Server version cached at last successful test, e.g. "7.0.5" or "16.2". */
+  dbVersion?: string | null
+  /** Per-engine extras (PG schemas, MySQL charset, Mongo replicaSet name). */
+  metadata?: Record<string, unknown> | null
   tags: string[]
   readOnly: boolean
   createdBy: string
@@ -67,15 +76,55 @@ export interface ExportJob {
   createdAt: string
 }
 
-export interface SyncJob {
+// ─── Phase 4: CDC sync (continuous replication) ─────────────────────────────
+/** queued | bootstrapping | tailing | paused | failed */
+export type CdcSyncStatus = 'queued' | 'bootstrapping' | 'tailing' | 'paused' | 'failed'
+
+export interface CdcSyncRun {
   id: string
+  jobId: string
+  phase: string
+  startedAt: string
+  finishedAt: string | null
+  inserts: number
+  updates: number
+  deletes: number
+  errorsCount: number
+  lastError: string | null
+}
+
+export interface CdcSyncJob {
+  id: string
+  name: string
   sourceConnId: string
   destConnId: string
-  scope: unknown
-  writeMode: string
-  schedule?: string
+  sourceType: DbType
+  destType: DbType
+  sourceDatabase: string | null
+  destDatabase: string | null
+  namespaces: Array<{ database: string; name: string }> | null
+  bootstrap: 'snapshot' | 'tail'
+  status: CdcSyncStatus
+  lastEventAt: string | null
+  lastError: string | null
+  pauseRequested: boolean
   enabled: boolean
   createdAt: string
+  updatedAt: string
+  /** Included by GET endpoints. */
+  source?: { id: string; name: string; dbType: DbType }
+  destination?: { id: string; name: string; dbType: DbType }
+  runs?: CdcSyncRun[]
+}
+
+export interface CreateCdcSyncBody {
+  name: string
+  sourceConnId: string
+  destConnId: string
+  sourceDatabase?: string
+  destDatabase?: string
+  namespaces?: Array<{ database: string; name: string }>
+  bootstrap?: 'snapshot' | 'tail'
 }
 
 export interface BackupJob {
@@ -298,4 +347,149 @@ export interface SavedQuery {
   query: unknown
   isPipeline: boolean
   createdAt: string
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-engine migration v2 (Phase 1C+)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Canonical type tokens emitted by the inference layer. */
+export type CanonicalType =
+  | 'string' | 'int' | 'long' | 'float' | 'double' | 'decimal'
+  | 'boolean' | 'date' | 'timestamp' | 'time' | 'binary' | 'uuid'
+  | 'objectid' | 'json' | 'jsonb' | 'array'
+  | 'mixed' | 'null' | 'unknown'
+
+export interface NamespaceRef { database: string; name: string }
+
+export interface InferredColumn {
+  name: string
+  type: CanonicalType
+  nullable: boolean
+  primaryKey?: boolean
+  references?: string
+  presenceCount?: number
+  observedTypes?: CanonicalType[]
+}
+
+export interface InferredSchema {
+  namespace: NamespaceRef
+  approxCount?: number
+  columns: InferredColumn[]
+  warnings: SchemaWarning[]
+}
+
+export interface SchemaWarning {
+  namespace: NamespaceRef
+  column?: string
+  severity: 'info' | 'warn' | 'error'
+  code: string
+  message: string
+}
+
+export interface PreviewResponse {
+  schemas: InferredSchema[]
+  warnings: SchemaWarning[]
+  ddl: string[]
+}
+
+export interface MigrationV2Job {
+  id: string
+  name: string
+  profileId: string
+  sourceConnId: string
+  destConnId: string
+  sourceType: DbType
+  destType: DbType
+  sourceDatabase: string | null
+  destDatabase: string | null
+  sampleSize: number
+  batchSize: number
+  parallelism: number
+  dropExisting: boolean
+  failOnTypeConflict: boolean
+  createdBy: string
+  createdAt: string
+  source?: { id: string; name: string; dbType: DbType }
+  destination?: { id: string; name: string; dbType: DbType }
+  runs?: MigrationV2Run[]
+}
+
+export type MigrationPhase =
+  | 'queued' | 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled'
+
+export interface MigrationProgressTick {
+  namespace: NamespaceRef
+  phase: 'inferring' | 'initialising' | 'streaming' | 'finalising' | 'done' | 'failed'
+  written: number
+  skipped: number
+  failed: number
+  approxTotal?: number
+  error?: string
+}
+
+export interface MigrationV2Run {
+  id: string
+  jobId: string
+  profileId: string
+  phase: MigrationPhase
+  cancelRequested: boolean
+  dryRun: boolean
+  startedAt: string | null
+  finishedAt: string | null
+  totalNamespaces: number
+  succeededNs: number
+  failedNs: number
+  totalWritten: number
+  totalSkipped: number
+  totalFailed: number
+  progress: Record<string, MigrationProgressTick> | null
+  warnings: SchemaWarning[] | null
+  errors: Array<{ namespace: NamespaceRef | null; error: string }> | null
+  ddlPreview: string | null
+  createdAt: string
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SQL monitor snapshot (Phase 2B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SqlMonitorSnapshot {
+  version: string
+  uptimeSeconds: number
+  currentDatabase: string
+
+  connections: {
+    current: number
+    max: number | null
+    active: number
+    idle: number
+  }
+
+  throughput: {
+    transactionsPerSec: number | null
+    queriesPerSec: number | null
+    cacheHitRatio: number | null
+  }
+
+  topTables: Array<{
+    schema: string
+    name: string
+    sizeBytes: number
+    rowCount: number
+  }>
+
+  activeQueries: Array<{
+    pid: string
+    user: string
+    database: string
+    state: string
+    durationMs: number
+    query: string
+  }>
+
+  replication: {
+    isReplica: boolean
+    lagSeconds: number | null
+  } | null
 }

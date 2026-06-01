@@ -10,6 +10,8 @@ import { createHash } from 'node:crypto';
 
 const CreateBody = z.object({
   name: z.string().min(1),
+  // dbType defaults to mongodb so existing clients (no field sent) still work.
+  dbType: z.enum(['mongodb', 'postgres', 'mysql']).default('mongodb'),
   uri: z.string().min(1),
   tags: z.array(z.string()).default([]),
   readOnly: z.boolean().default(false),
@@ -86,6 +88,98 @@ export async function connectionRoutes(app: FastifyInstance) {
       return await testConnection(id);
     } catch (err) {
       return reply.code(400).send({ error: String(err) });
+    }
+  });
+
+  // ── Schema discovery (Phase 0 of cross-engine migration) ───────────────────
+  // Returns a uniform shape across mongodb / postgres / mysql so the Migrate
+  // wizard can render the same tree component for any source.
+  app.get('/:id/schema', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { database, sampleSize } = req.query as { database?: string; sampleSize?: string };
+    const scope = profileScope(req);
+
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+
+    try {
+      const { discoverConnectionSchema } = await import('../services/discovery.service.js');
+      const namespaces = await discoverConnectionSchema(id, {
+        database,
+        sampleSize: sampleSize ? Number(sampleSize) : undefined,
+      });
+      return { dbType: conn.dbType, namespaces };
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
+  });
+
+  // List databases visible to this connection's credential.
+  // Used by the Migrate wizard's "pick a database" step.
+  app.get('/:id/databases', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+    try {
+      const { listConnectionDatabases } = await import('../services/discovery.service.js');
+      const databases = await listConnectionDatabases(id);
+      return { dbType: conn.dbType, databases };
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
+  });
+
+  // ── SQL rows fetch (Phase 2A) ──────────────────────────────────────────────
+  // Used by the SqlExplorer on the Explore page. Refuses Mongo connections
+  // because Mongo has its own `/explore/*` endpoints with richer filtering.
+  app.get('/:id/sql/tables/:database/:table/rows', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id, database, table } = req.params as { id: string; database: string; table: string };
+    const { limit = '50', offset = '0' } = req.query as { limit?: string; offset?: string };
+    const scope = profileScope(req);
+
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+    if (conn.dbType === 'mongodb') {
+      return reply.code(400).send({ error: 'Use /explore endpoints for MongoDB connections' });
+    }
+
+    try {
+      const { fetchSqlRows } = await import('../services/discovery.service.js');
+      return await fetchSqlRows(id, { database, name: table }, {
+        limit: Number(limit), offset: Number(offset),
+      });
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
+  });
+
+  // ── SQL monitor snapshot (Phase 2B) ────────────────────────────────────────
+  // Returns the SqlMonitorSnapshot for a Postgres or MySQL connection.
+  // Mongo connections must use the existing /monitor/snapshot endpoint.
+  app.get('/:id/sql/monitor/snapshot', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = profileScope(req);
+
+    const conn = await prisma.connection.findFirst({ where: { id, ...scope } });
+    if (!conn) return reply.code(404).send({ error: 'Not found' });
+    if (conn.dbType === 'mongodb') {
+      return reply.code(400).send({ error: 'Use /monitor/snapshot for MongoDB connections' });
+    }
+
+    try {
+      const { getSqlMonitorSnapshot } = await import('../services/sql-monitor.service.js');
+      return await getSqlMonitorSnapshot(id);
+    } catch (err) {
+      // AggregateError (DNS / TCP multi-attempt failure) has an empty .message;
+      // unwrap the first inner error so the UI shows the real cause.
+      let msg: string;
+      if (err instanceof AggregateError && err.errors?.length) {
+        msg = (err.errors[0] as Error).message ?? String(err.errors[0]);
+      } else {
+        msg = (err as Error).message ?? String(err);
+      }
+      return reply.code(500).send({ error: `Cannot connect to ${conn.dbType} server: ${msg}` });
     }
   });
 

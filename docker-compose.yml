@@ -71,6 +71,11 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=30d'
+    # Allow Prometheus to reach the API when it runs on the host machine
+    # (local dev via `pnpm dev`). Mac/Win Docker Desktop resolves
+    # `host.docker.internal` automatically; on Linux we need this mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   grafana:
     build:

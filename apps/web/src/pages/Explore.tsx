@@ -8,6 +8,7 @@ import { api, type Connection, type SavedQuery } from '../lib/api'
 import { useConnectionsStore } from '../stores/connections.store'
 import { SchemaGraph } from '../components/explore/SchemaGraph'
 import { AggregationEditor } from '../components/explore/AggregationEditor'
+import { SqlExplorer } from '../components/explore/SqlExplorer'
 import { formatBytes } from '../lib/utils'
 
 interface DbInfo { name: string }
@@ -114,6 +115,13 @@ export function ExplorePage() {
         Select a connection from the Connections page to explore.
       </div>
     )
+  }
+
+  // SQL connections get their own dedicated explorer (tables + paginated rows).
+  // The Mongo body below stays untouched so its existing query/schema/aggregate
+  // tabs continue to work — we just dispatch on dbType here.
+  if (conn.dbType !== 'mongodb') {
+    return <SqlExplorer conn={conn} />
   }
 
   const docs = queryResult?.docs ?? []

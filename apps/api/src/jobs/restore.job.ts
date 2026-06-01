@@ -95,31 +95,15 @@ export function startRestoreWorker() {
         // ── STEP 3: Extract tar ──
         await execFileAsync('tar', ['-xf', decryptedTar, '-C', extractDir]);
 
-        // ── STEP 4: Decrypt target MongoDB URI ──
+        // ── STEP 4: Decrypt target URI ──
         const targetUri = decrypt(restoreRun.targetConnection.encryptedUri);
-        const tlsInsecure = targetUri.startsWith('mongodb+srv://');
 
-        // ── STEP 5: mongorestore ──
-        // --drop: drops each collection before restoring (clean restore)
-        // --gzip: because mongodump used --gzip
-        // NOTE: --preserveUUID is intentionally omitted — it requires the
-        // `applyOps` admin command which MongoDB Atlas does not grant to
-        // regular users. New UUIDs are fine for restore semantics.
-        const restoreArgs = [
-          '--uri', targetUri,
-          '--dir', dumpDir,
-          '--gzip',
-          '--drop',
-          ...(tlsInsecure ? ['--tlsInsecure'] : []),
-        ];
-
-        const { stdout, stderr } = await execFileAsync('mongorestore', restoreArgs, {
-          env: { ...process.env },
-          maxBuffer: 50 * 1024 * 1024,
-        });
-
-        // ── STEP 6: Mark success ──
-        const log = [stderr, stdout].filter(Boolean).join('\n') || 'Restore completed successfully';
+        // ── STEP 5: Run the engine-appropriate restore tool ──
+        // The encrypt/extract pipeline above is identical for every engine —
+        // the dump format in `extractDir` differs, and so does the CLI we use
+        // to ingest it on the target.
+        const targetDbType = restoreRun.targetConnection.dbType;
+        const log = await runEngineRestore(targetDbType, targetUri, extractDir, dumpDir);
         await prisma.restoreRun.update({
           where: { id: restoreRunId },
           data: { status: 'success', finishedAt: new Date(), log },
@@ -146,4 +130,139 @@ export function startRestoreWorker() {
   });
 
   return worker;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Engine-specific restore helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Dispatch by target engine. Returns the combined stdout+stderr of the
+ * restore tool for logging in `RestoreRun.log`.
+ *
+ * Each branch assumes the backup was created by the matching engine in
+ * `backup.job.ts`:
+ *   - Mongo  → `extractDir/dump/<db>/...` (mongodump output)
+ *   - PG     → `extractDir/dump/pg.dump`  (pg_dump custom format)
+ *   - MySQL  → `extractDir/dump/mysql.sql` (mysqldump SQL script)
+ *
+ * Cross-engine restore is not supported (you can't pg_restore a Mongo dump).
+ * The route layer should refuse that combination before enqueuing.
+ */
+async function runEngineRestore(
+  dbType: string,
+  targetUri: string,
+  extractDir: string,
+  dumpDir: string,
+): Promise<string> {
+  if (dbType === 'mongodb') {
+    return runMongoRestore(targetUri, dumpDir);
+  }
+  if (dbType === 'postgres') {
+    return runPostgresRestore(targetUri, extractDir);
+  }
+  if (dbType === 'mysql') {
+    return runMysqlRestore(targetUri, extractDir);
+  }
+  throw new Error(`Restore not supported for target dbType "${dbType}"`);
+}
+
+async function runMongoRestore(uri: string, dumpDir: string): Promise<string> {
+  // NOTE: --preserveUUID intentionally omitted (needs applyOps, blocked on Atlas).
+  // NOTE: --tlsInsecure intentionally omitted (breaks SNI on Atlas LB).
+  //
+  // ⚠️ Strip any default-database path from the URI. If the URI is
+  // `mongodb://user:pass@host/testdb?authSource=admin`, mongorestore treats
+  // `/testdb` as "I want to restore INTO a single database called testdb",
+  // and then refuses to honour --dir's multi-db dump layout — it logs
+  // "don't know what to do with subdirectory `dump/<db>`, skipping...".
+  // We want mongorestore to operate on the dump root only, so the connection
+  // string must NOT pin a default database.
+  const cleanUri = stripMongoUriPath(uri);
+  const args = ['--uri', cleanUri, '--dir', dumpDir, '--gzip', '--drop'];
+  const { stdout, stderr } = await execFileAsync('mongorestore', args, {
+    env: { ...process.env },
+    maxBuffer: 50 * 1024 * 1024,
+  });
+  return [stderr, stdout].filter(Boolean).join('\n') || 'mongorestore completed successfully';
+}
+
+/**
+ * Remove the `/dbname` path component from a Mongo URI, preserving auth,
+ * host(s), options, and the `mongodb+srv://` scheme. Examples:
+ *   mongodb://u:p@host:27017/testdb           → mongodb://u:p@host:27017/
+ *   mongodb://u:p@host/testdb?authSource=admin → mongodb://u:p@host/?authSource=admin
+ *   mongodb+srv://u:p@cluster.x/db?w=majority → mongodb+srv://u:p@cluster.x/?w=majority
+ */
+function stripMongoUriPath(uri: string): string {
+  // mongodb URIs are awkward for Node's URL class with multiple hosts, so do
+  // it by regex. We split into "scheme://authority", "/db", and "?opts".
+  return uri.replace(
+    /^(mongodb(?:\+srv)?:\/\/[^/?]+)(?:\/[^?]*)?(\?.*)?$/,
+    '$1/$2',
+  );
+}
+
+async function runPostgresRestore(uri: string, extractDir: string): Promise<string> {
+  // pg_dump produced `dumpDir/pg.dump` inside `extractDir/dump/`.
+  const dumpFile = path.join(extractDir, 'dump', 'pg.dump');
+  const args = [
+    '--dbname', uri,
+    '--clean',                 // drop existing objects before restoring
+    '--if-exists',             // tolerate missing objects on the drop step
+    '--no-owner', '--no-acl',  // restore as the connection user; ignore GRANT/REVOKE
+    '--exit-on-error',
+    dumpFile,
+  ];
+  const { stdout, stderr } = await execFileAsync('pg_restore', args, {
+    env: { ...process.env },
+    maxBuffer: 50 * 1024 * 1024,
+  });
+  return [stderr, stdout].filter(Boolean).join('\n') || 'pg_restore completed successfully';
+}
+
+async function runMysqlRestore(uri: string, extractDir: string): Promise<string> {
+  // mysqldump produced `dumpDir/mysql.sql` inside `extractDir/dump/`.
+  const sqlFile = path.join(extractDir, 'dump', 'mysql.sql');
+  const u = new URL(uri);
+  const host = u.hostname;
+  const port = u.port || '3306';
+  const user = decodeURIComponent(u.username);
+  const password = decodeURIComponent(u.password);
+  const targetDb = decodeURIComponent(u.pathname.replace(/^\//, ''));
+
+  // The dump may contain its own `CREATE DATABASE` + `USE` statements (we used
+  // --databases when dumping). We still pass --database if the URI carries
+  // one, in case the SQL doesn't switch context.
+  const args = [
+    '-h', host, '-P', port, '-u', user,
+    // Force TCP — see comment in backup.job.ts dumpMysql(). When --host=localhost
+    // the mysql client falls back to a Unix socket (/tmp/mysql.sock) and ignores
+    // -P, which fails when MySQL runs in Docker.
+    '--protocol=TCP',
+    '--force', // continue on individual errors so partial restores still log usefully
+  ];
+  if (targetDb) args.push('--database', targetDb);
+
+  // Stream the file into mysql's stdin. We avoid `execFile` here because we
+  // need an stdio pipe — use spawn + manual collection.
+  const { spawn } = await import('node:child_process');
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn('mysql', args, {
+      env: { ...process.env, MYSQL_PWD: password },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdoutBuf = '', stderrBuf = '';
+    proc.stdout.on('data', (d) => { stdoutBuf += d.toString(); });
+    proc.stderr.on('data', (d) => { stderrBuf += d.toString(); });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      const log = [stderrBuf, stdoutBuf].filter(Boolean).join('\n') || 'mysql import completed';
+      if (code === 0) resolve(log);
+      else reject(new Error(`mysql exited with code ${code}: ${log}`));
+    });
+    const fileStream = createReadStream(sqlFile);
+    fileStream.pipe(proc.stdin);
+    fileStream.on('error', reject);
+  });
 }

@@ -11,12 +11,14 @@ import { connectionRoutes } from './routes/connections.js';
 import { exploreRoutes } from './routes/explore.js';
 import { monitorRoutes, registerMonitorSocket } from './routes/monitor.js';
 import { exportRoutes } from './routes/export.js';
-import { syncRoutes } from './routes/sync.js';
+import { cdcSyncRoutes } from './routes/cdc-sync.js';
 import { backupRoutes } from './routes/backup.js';
 import { alertRoutes } from './routes/alerts.js';
 import { migrationRoutes } from './routes/migration.js';
+import { migrationV2Routes } from './routes/migration-v2.js';
+import { startMigrationV2Worker } from './migration/worker.js';
 import { startExportWorker } from './jobs/export.job.js';
-import { startSyncWorker } from './jobs/sync.job.js';
+import { startCdcWorker } from './jobs/cdc-sync.job.js';
 import { startBackupWorker } from './jobs/backup.job.js';
 import { startRestoreWorker } from './jobs/restore.job.js';
 import { startMigrationWorker } from './jobs/migration.job.js';
@@ -58,10 +60,15 @@ await app.register(async (api) => {
     await sub.register(exploreRoutes,    { prefix: '/connections' });
     await sub.register(monitorRoutes,    { prefix: '/connections' });
     await sub.register(exportRoutes,     { prefix: '/export' });
-    await sub.register(syncRoutes,       { prefix: '/sync' });
+    // CDC sync (Phase 4). Continuous, resumable replication — supersedes
+    // the legacy batch /sync (Mongo-only cron re-copy), which was removed.
+    await sub.register(cdcSyncRoutes,    { prefix: '/cdc-sync' });
     await sub.register(backupRoutes,     { prefix: '/backup' });
     await sub.register(alertRoutes,      { prefix: '/alerts' });
-    await sub.register(migrationRoutes,  { prefix: '/migration' });
+    await sub.register(migrationRoutes,   { prefix: '/migration' });
+    // Cross-engine migration (Phase 1C+). Separate prefix from the legacy
+    // mongodump-based /api/migration so both flows can coexist.
+    await sub.register(migrationV2Routes, { prefix: '/migration-v2' });
   }));
 }, { prefix: '/api' });
 
@@ -97,7 +104,7 @@ registerMonitorSocket(app);
 
 // Start BullMQ workers
 startExportWorker();
-startSyncWorker();
+startCdcWorker();
 startBackupWorker();
 startRestoreWorker();
 
@@ -107,6 +114,10 @@ startMigrationWorker(
   (jobId, phase, line) => { try { io?.emit(`migration:log:${jobId}`, { phase, line }); } catch (_) { /* noop */ } },
   (jobId) => { try { io?.emit(`migration:done:${jobId}`, {}); } catch (_) { /* noop */ } },
 );
+
+// Cross-engine migration worker (Phase 1C). Uses Socket.io namespaces for
+// per-run progress streams — see src/migration/worker.ts.
+startMigrationV2Worker(app.io);
 
 // Start scheduler (async — loads backup jobs from DB on startup)
 await startScheduler();

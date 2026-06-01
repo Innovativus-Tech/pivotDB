@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma.js';
-import { syncQueue, backupQueue } from '../lib/queue.js';
+import { backupQueue } from '../lib/queue.js';
 import { evaluateAlerts } from '../lib/alertEvaluator.js';
 import { getSnapshot } from '../services/monitor.service.js';
 
@@ -74,21 +74,6 @@ export async function startScheduler() {
       }
     } catch (err) {
       console.error('[scheduler] alert sweep error:', (err as Error).message);
-    }
-  });
-
-  // Sync jobs via BullMQ repeat (stateless — BullMQ manages the schedule)
-  cron.schedule('*/5 * * * *', async () => {
-    const syncJobs = await prisma.syncJob.findMany({
-      where: { enabled: true, schedule: { not: null } },
-    });
-    for (const job of syncJobs) {
-      if (job.schedule && cron.validate(job.schedule)) {
-        await syncQueue.add('sync', { jobId: job.id }, {
-          jobId: `sync-repeat-${job.id}`,
-          repeat: { pattern: job.schedule, tz: SCHEDULER_TZ },
-        }).catch(() => {});
-      }
     }
   });
 
