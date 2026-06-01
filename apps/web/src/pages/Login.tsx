@@ -34,7 +34,7 @@ export function LoginPage() {
           <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
             <Database className="h-6 w-6 text-primary" />
           </div>
-          <h1 className="text-2xl font-bold">MongoDB Visualizer</h1>
+          <h1 className="text-2xl font-bold">PivotDB</h1>
           <p className="text-sm text-muted-foreground mt-1">Sign in to your account</p>
         </div>
 

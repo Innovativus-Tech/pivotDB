@@ -85,13 +85,20 @@ function Sidebar({ user, activeCount, onSignOut, theme, onToggleTheme }: {
           width: 28, height: 28, borderRadius: 6,
           background: 'var(--accent)', color: '#fff',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 700, fontSize: 14, letterSpacing: '-0.04em',
           boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15)',
           flexShrink: 0,
-        }}>m</div>
+        }}>
+          {/* Stylized P with a small rotation arc — the "pivot" mark. */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-label="PivotDB">
+            <path d="M4 3v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            <path d="M4 3h5a3 3 0 0 1 0 6H4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M10.5 11.5a3 3 0 1 1-1-2.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.7"/>
+            <path d="M10.7 9.5l-1.2 2 0-1.8 1.2-0.2z" fill="currentColor" opacity="0.85"/>
+          </svg>
+        </div>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            MongoDB Visualizer
+            PivotDB
           </div>
         </div>
       </div>

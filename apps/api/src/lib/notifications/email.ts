@@ -23,9 +23,9 @@ export async function sendAlertEmail(
       : undefined,
   });
   await transporter.sendMail({
-    from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'alerts@mongodb-visualizer',
+    from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'alerts@pivotdb',
     to,
-    subject: `[MongoDB Visualizer Alert] ${subject}`,
+    subject: `[PivotDB Alert] ${subject}`,
     text: body,
   });
 }
