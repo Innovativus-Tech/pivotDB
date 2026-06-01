@@ -21,21 +21,37 @@ FROM node:20-bookworm-slim AS production
 
 WORKDIR /app
 
-# Install mongodump / mongorestore (mongodb-database-tools).
-# Notes:
-#   - Debian's repo component is `main`, NOT `multiverse` (that's Ubuntu).
-#   - `apt-key` is deprecated in Debian 12; use a keyring file + signed-by instead.
+# Install mongodump (v7) + pg_dump v17 (matches Neon, RDS PG17) +
+# mariadb-client (works against MySQL 8 in practice — Aiven, Cloud SQL, RDS).
+#
+# Why postgresql-client-17 explicitly (not Debian's stock postgresql-client=15):
+#   pg_dump refuses to dump a server NEWER than itself ("server version mismatch").
+#   Debian bookworm ships v15; Neon runs v17 → backups would fail.
+#
+# Why mariadb-client (default-mysql-client) for MySQL:
+#   Oracle's own MySQL APT repo currently ships an expired GPG key. mariadb's
+#   mysqldump is API-compatible with MySQL 8 dumps. If we hit caching_sha2_password
+#   issues we'll add `--default-auth=mysql_native_password` at the call site.
 RUN apt-get update && \
   apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
   install -d -m 0755 /etc/apt/keyrings && \
+  \
+  # MongoDB 7
   curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc \
     | gpg --dearmor -o /etc/apt/keyrings/mongodb-server-7.0.gpg && \
   echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
     > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
+  \
+  # PostgreSQL 17 (PGDG)
+  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    | gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg && \
+  echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+    > /etc/apt/sources.list.d/pgdg.list && \
+  \
   apt-get update && \
   apt-get install -y --no-install-recommends \
     mongodb-database-tools \
-    postgresql-client \
+    postgresql-client-17 \
     default-mysql-client && \
   rm -rf /var/lib/apt/lists/*
 

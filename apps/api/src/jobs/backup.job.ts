@@ -246,7 +246,11 @@ async function dumpMysql(uri: string, dumpDir: string, databases: string[]): Pro
     '--single-transaction',
     '--routines', '--triggers',
     '--no-tablespaces',
-    '--set-gtid-purged=OFF',  // omit GTID metadata (RDS / Cloud SQL friendly)
+    // NOTE: do NOT pass `--set-gtid-purged=OFF` — that flag is MySQL-specific
+    // and MariaDB's mysqldump (which Debian's `default-mysql-client` ships)
+    // rejects it as "unknown variable". Aiven free tier / most managed MySQL
+    // setups don't enable GTID anyway. If we ever target a GTID-enabled
+    // server we'll need to swap in Oracle's mysql-client and re-add the flag.
     '--databases', ...dbList,
   ];
 
