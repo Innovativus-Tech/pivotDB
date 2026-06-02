@@ -206,6 +206,13 @@ async function dumpPostgres(uri: string, dumpDir: string): Promise<void> {
     '--format=custom',         // -Fc
     '--no-owner',              // restore works regardless of target user
     '--no-acl',                // don't dump GRANT/REVOKE statements
+    // Skip CDC infrastructure objects. Replaying these on restore requires
+    // SUPERUSER (specifically `ALTER PUBLICATION ... ADD TABLES IN SCHEMA`),
+    // which managed Postgres roles (Neon's neondb_owner, RDS, Cloud SQL)
+    // do not have. They are application concerns, not data — the sync code
+    // re-provisions its own publications/slots on demand.
+    '--no-publications',
+    '--no-subscriptions',
     '--file', outFile,
   ]);
 }
