@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data-v2:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -108,7 +108,12 @@ services:
       - api
 
 volumes:
-  postgres-data:
+  # NOTE: renamed from `postgres-data` to `postgres-data-v2` to force a fresh
+  # empty metadata DB on the next deploy (full reset — all users, connections,
+  # alerts, sync/backup job records). The old volume is left orphaned in
+  # Docker — safe to delete via the Coolify Server → Volumes page later if
+  # you want to reclaim disk.
+  postgres-data-v2:
   redis-data:
   # NOTE: renamed from `prometheus-data` to `prometheus-data-v2` to force a
   # fresh empty TSDB on the next deploy. The previous volume had duplicate

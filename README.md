@@ -123,7 +123,7 @@ The compose file declares five volumes; **all four marked critical must be persi
 
 | Volume | Mount | Critical? |
 |---|---|---|
-| `postgres-data` | `/var/lib/postgresql/data` | ✅ Critical — app metadata |
+| `postgres-data-v2` | `/var/lib/postgresql/data` | ✅ Critical — app metadata |
 | `redis-data` | `/data` | Important — in-flight jobs |
 | `backup-data` | `/app/backups` | ✅ Critical — your backup archives |
 | `grafana-data` | `/var/lib/grafana` | Optional — dashboards/users |
