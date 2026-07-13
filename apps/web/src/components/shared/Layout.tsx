@@ -51,7 +51,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <Sidebar
         user={user}
         activeCount={activeCount}
-        onSignOut={clearAuth}
+        onSignOut={() => {
+          clearAuth()
+          window.location.href = '/login'
+        }}
         theme={theme}
         onToggleTheme={toggleTheme}
       />
