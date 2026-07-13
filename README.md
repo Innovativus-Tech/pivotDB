@@ -143,7 +143,7 @@ Same-engine pairs (`Mongo→Mongo`, `PG→PG`, `MySQL→MySQL`) also work — ju
 
 ## Adding your first connection
 
-1. Open the web UI and sign in
+1. Open the web UI — on first run you'll be redirected to a setup page to create the admin account (this only works once; after that, sign in and invite additional users from Settings)
 2. **Connections → + New connection**
 3. Pick engine (Mongo / Postgres / MySQL), paste a connection URI
 4. **Test** — verify version, latency, and replica/cluster info

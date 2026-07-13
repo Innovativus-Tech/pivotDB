@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
 import { Database } from 'lucide-react'
-import { login } from '../lib/api'
+import { login, getAuthStatus } from '../lib/api'
 import { useAuthStore } from '../stores/connections.store'
 
 export function LoginPage() {
@@ -11,6 +11,14 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    getAuthStatus()
+      .then((res) => {
+        if (res.needsSetup) navigate('/signup', { replace: true })
+      })
+      .catch(() => {})
+  }, [navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -70,6 +78,10 @@ export function LoginPage() {
             {loading ? 'Please wait…' : 'Sign In'}
           </button>
         </form>
+        <p className="text-xs text-muted-foreground text-center mt-4">
+          Setting up this instance for the first time?{' '}
+          <Link to="/signup" className="text-primary hover:underline">Create the admin account</Link>
+        </p>
       </div>
     </div>
   )

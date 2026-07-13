@@ -10,9 +10,12 @@ interface JWTUser {
 }
 
 export default fp(async function authPlugin(app: FastifyInstance) {
-  await app.register(fjwt, {
-    secret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
-  });
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET must be set (generate: openssl rand -hex 32)');
+  }
+
+  await app.register(fjwt, { secret });
 
   app.decorate('authenticate', async function (request: FastifyRequest, reply: FastifyReply) {
     try {

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Layout } from './components/shared/Layout'
 import { LoginPage } from './pages/Login'
+import { SignupPage } from './pages/Signup'
 import { ConnectionsPage } from './pages/Connections'
 import { ExplorePage } from './pages/Explore'
 import { MonitorPage } from './pages/Monitor'
@@ -21,6 +22,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
         <Route path="/*" element={
           <RequireAuth>
             <Layout>

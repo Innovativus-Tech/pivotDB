@@ -35,12 +35,23 @@ export const api = {
 }
 
 // Auth helpers
+type AuthResponse = { token: string; user: { id: string; email: string; role: string; profileId: string | null } }
+
 export async function login(email: string, password: string) {
-  const res = await api.post<{ token: string; user: { id: string; email: string; role: string; profileId: string | null } }>(
-    '/api/connections/auth/login', { email, password }
-  )
+  const res = await api.post<AuthResponse>('/api/connections/auth/login', { email, password })
   localStorage.setItem('token', res.token)
   return res
+}
+
+/** Only succeeds once — creates the first superadmin. 403s after that. */
+export async function register(email: string, password: string) {
+  const res = await api.post<AuthResponse>('/api/connections/auth/register', { email, password })
+  localStorage.setItem('token', res.token)
+  return res
+}
+
+export function getAuthStatus() {
+  return api.get<{ needsSetup: boolean }>('/api/connections/auth/status')
 }
 
 // Connection types

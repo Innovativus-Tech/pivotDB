@@ -6,7 +6,7 @@ import {
 } from '../services/connection.service.js';
 import { profileScope, requireAdmin, requireSuperAdmin } from '../plugins/auth.js';
 import { prisma } from '../lib/prisma.js';
-import { createHash } from 'node:crypto';
+import { hashPassword, verifyPassword, PasswordSchema } from '../lib/password.js';
 
 const CreateBody = z.object({
   name: z.string().min(1),
@@ -29,6 +29,27 @@ interface JWTUser {
   role: 'superadmin' | 'admin' | 'viewer';
   profileId: string | null;
 }
+
+const LoginBody = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+
+const RegisterBody = z.object({
+  email: z.string().email(),
+  password: PasswordSchema,
+});
+
+const CreateProfileBody = z.object({
+  name: z.string().min(1),
+  adminEmail: z.string().email(),
+  adminPassword: PasswordSchema,
+});
+
+const InviteViewerBody = z.object({
+  email: z.string().email(),
+  password: PasswordSchema,
+});
 
 export async function connectionRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: [app.authenticate] }, async (req) => {
@@ -185,12 +206,21 @@ export async function connectionRoutes(app: FastifyInstance) {
 
   // ── Auth routes ────────────────────────────────────────────────────────────
 
+  // Whether the instance still needs its first superadmin account created.
+  // Drives the frontend's choice between showing the sign-in vs sign-up page.
+  app.get('/auth/status', async () => {
+    const count = await prisma.user.count();
+    return { needsSetup: count === 0 };
+  });
+
   app.post('/auth/login', async (req, reply) => {
-    const { email, password } = req.body as { email: string; password: string };
+    const parsed = LoginBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid email or password' });
+    const { email, password } = parsed.data;
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return reply.code(401).send({ error: 'Invalid credentials' });
-    const hash = createHash('sha256').update(password).digest('hex');
-    if (hash !== user.passwordHash) return reply.code(401).send({ error: 'Invalid credentials' });
+    const valid = await verifyPassword(password, user.passwordHash);
+    if (!valid) return reply.code(401).send({ error: 'Invalid credentials' });
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     const payload: JWTUser = {
       userId: user.id,
@@ -202,19 +232,25 @@ export async function connectionRoutes(app: FastifyInstance) {
     return { token, user: { id: user.id, email: user.email, role: user.role, profileId: user.profileId } };
   });
 
-  // Register — only works when 0 users exist (creates superadmin)
+  // Register — only works when 0 users exist (creates the first superadmin).
+  // This is the app's one-time setup step; after that, accounts are created
+  // via invites (see /profiles and /profiles/:id/viewers below).
   app.post('/auth/register', async (req, reply) => {
-    const { email, password } = req.body as { email: string; password: string; role?: string };
+    const parsed = RegisterBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Invalid input' });
+    const { email, password } = parsed.data;
     const count = await prisma.user.count();
     if (count > 0) {
-      return reply.code(403).send({ error: 'Registration is closed. Contact your super admin.' });
+      return reply.code(403).send({ error: 'Setup already complete. Contact your super admin for access.' });
     }
-    const passwordHash = createHash('sha256').update(password).digest('hex');
+    const passwordHash = await hashPassword(password);
     try {
       const user = await prisma.user.create({
         data: { email, passwordHash, role: 'superadmin' },
       });
-      return reply.code(201).send({ email: user.email, role: user.role });
+      const payload: JWTUser = { userId: user.id, email: user.email, role: 'superadmin', profileId: null };
+      const token = app.jwt.sign(payload, { expiresIn: '7d' });
+      return reply.code(201).send({ token, user: { id: user.id, email: user.email, role: user.role, profileId: user.profileId } });
     } catch {
       return reply.code(409).send({ error: 'Email already exists' });
     }
@@ -224,10 +260,10 @@ export async function connectionRoutes(app: FastifyInstance) {
 
   app.post('/profiles', { preHandler: [app.authenticate] }, async (req, reply) => {
     if (!requireSuperAdmin(req, reply)) return;
-    const { name, adminEmail, adminPassword } = req.body as {
-      name: string; adminEmail: string; adminPassword: string;
-    };
-    const passwordHash = createHash('sha256').update(adminPassword).digest('hex');
+    const parsed = CreateProfileBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Invalid input' });
+    const { name, adminEmail, adminPassword } = parsed.data;
+    const passwordHash = await hashPassword(adminPassword);
     try {
       const adminUser = await prisma.user.create({
         data: { email: adminEmail, passwordHash, role: 'admin' },
@@ -266,8 +302,10 @@ export async function connectionRoutes(app: FastifyInstance) {
     if (user.role === 'admin' && user.profileId !== id) {
       return reply.code(403).send({ error: 'Can only invite to your own profile' });
     }
-    const { email, password } = req.body as { email: string; password: string };
-    const passwordHash = createHash('sha256').update(password).digest('hex');
+    const parsed = InviteViewerBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Invalid input' });
+    const { email, password } = parsed.data;
+    const passwordHash = await hashPassword(password);
     try {
       const viewer = await prisma.user.create({
         data: { email, passwordHash, role: 'viewer', profileId: id, invitedBy: user.userId },

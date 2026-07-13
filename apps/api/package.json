@@ -9,12 +9,8 @@
     "start": "node dist/index.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
-    "db:seed": "tsx prisma/seed.ts",
     "migrate:mongo-to-pg": "tsx scripts/migrate-mongo-to-pg.ts",
     "migrate:pg-to-mongo": "tsx scripts/migrate-pg-to-mongo.ts"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.600.0",
@@ -27,6 +23,7 @@
     "@types/archiver": "^7.0.0",
     "@vlasky/zongji": "^0.6.1",
     "archiver": "^8.0.0",
+    "bcryptjs": "^3.0.3",
     "bson": "7",
     "bullmq": "^5.12.0",
     "csv-stringify": "^6.5.1",
@@ -70,4 +67,3 @@
     }
   }
 }
-
